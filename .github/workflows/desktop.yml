@@ -92,13 +92,31 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="desktop-edge"
-          # List all asset IDs on the release and delete them
-          ASSET_IDS=$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}" \
-            --jq '.assets[].id' 2>/dev/null || true)
-          for id in $ASSET_IDS; do
+          set -euo pipefail
+          response="$RUNNER_TEMP/desktop-edge-release.json"
+          if ! status=$(curl -sSL -o "$response" -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/desktop-edge"); then
+            echo "::error::Could not list desktop-edge release assets"
+            exit 1
+          fi
+          if [[ "$status" == 404 ]]; then
+            echo "desktop-edge release does not exist yet"
+            exit 0
+          fi
+          if [[ "$status" != 200 ]]; then
+            echo "::error::Listing desktop-edge release assets returned HTTP $status"
+            exit 1
+          fi
+          release_id=$(jq -er '.id' "$response")
+          assets="$RUNNER_TEMP/desktop-edge-assets.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+            --paginate --slurp > "$assets"
+          jq -e 'type == "array" and all(.[]; type == "array")' "$assets" > /dev/null
+          for id in $(jq -r '.[].[] | .id' "$assets"); do
             echo "Deleting asset $id"
-            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" || true
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$id"
           done
 
   build-and-release:
@@ -450,15 +468,34 @@ jobs:
             sleep 3
           done
           test -s "$RUNNER_TEMP/desktop-release-check/latest.json"
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+            --paginate --slurp > "$RUNNER_TEMP/desktop-release-check/assets.json"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.sig' --dir "$RUNNER_TEMP/desktop-release-check" --clobber
           node <<'NODE'
           const assert = require('node:assert/strict');
           const { readFileSync } = require('node:fs');
-          const { join } = require('node:path');
-          const latest = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'desktop-release-check/latest.json'), 'utf8'));
+          const { basename, join } = require('node:path');
+          const checkDir = join(process.env.RUNNER_TEMP, 'desktop-release-check');
+          const latest = JSON.parse(readFileSync(join(checkDir, 'latest.json'), 'utf8'));
+          const assets = JSON.parse(readFileSync(join(checkDir, 'assets.json'), 'utf8')).flat();
+          const assetsByUrl = new Map(assets.map(asset => [asset.url, asset]));
+          const assetsByName = new Map(assets.map(asset => [asset.name, asset]));
           assert.equal(latest.version, process.env.EXPECTED_VERSION);
           for (const platform of ['darwin-aarch64', 'darwin-x86_64', 'linux-x86_64', 'windows-x86_64']) {
             const entry = latest.platforms?.[platform];
             assert.ok(entry?.signature?.trim() && entry?.url, `Missing signed updater for ${platform}`);
+            const asset = assetsByUrl.get(entry.url);
+            assert.ok(asset, `Updater URL for ${platform} is not an asset in this release`);
+            const filename = basename(decodeURIComponent(new URL(asset.browser_download_url).pathname));
+            assert.equal(filename, asset.name, `Unexpected updater asset name for ${platform}`);
+            assert.ok(filename.includes(process.env.EXPECTED_VERSION),
+              `Updater asset for ${platform} has an old version: ${filename}`);
+            const signatureName = `${asset.name}.sig`;
+            assert.ok(assetsByName.has(signatureName), `Missing uploaded ${signatureName}`);
+            assert.equal(readFileSync(join(checkDir, signatureName), 'utf8').trim(),
+              entry.signature.trim(), `Signature mismatch for ${platform}`);
           }
           NODE
 

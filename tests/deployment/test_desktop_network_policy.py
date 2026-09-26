@@ -48,6 +48,9 @@ def test_release_workflow_passes_updater_config_to_tauri() -> None:
 
     assert "createUpdaterArtifacts: true" in workflow
     assert "externalBin: ['binaries/ollama']" in workflow
-    assert "args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json" in workflow
+    assert (
+        "args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json"
+        in workflow
+    )
     assert "TAURI_CONFIG:" not in workflow
     assert "uploadUpdaterJson: true" in workflow
