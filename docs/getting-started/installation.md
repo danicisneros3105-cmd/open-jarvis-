@@ -237,10 +237,10 @@ See the [Python SDK guide](../user-guide/python-sdk.md) for the full API referen
 ## Hardware
 
 OpenJarvis has no special hardware requirements of its own — the CLI, server, and
-SDK run anywhere the software [Requirements](#requirements) below are met. What
-your hardware determines is which **local model** you can run comfortably, and you
-do not have to work that out yourself: `jarvis init` detects your CPU, RAM, and GPU,
-then writes a config with a matching inference engine and default model.
+SDK run anywhere the software [Requirements](#requirements) below are met.
+`jarvis init` detects your CPU, RAM, and GPU, then recommends an inference engine
+and local model for the generated config. You can choose a different engine during
+setup.
 
 ```bash
 jarvis init          # detect hardware, write a matching config
@@ -248,16 +248,21 @@ jarvis init          # detect hardware, write a matching config
 
 ### Recommended configurations
 
-| System RAM (no GPU) | GPU VRAM | Default model | Download |
-|---------------------|----------|---------------|----------|
-| 5–14 GB | Up to 8 GB | `qwen3.5:2b` | ~1.1 GB |
+These are the Qwen3.5 recommendations for `llamacpp`, `mlx`, `ollama`, `vllm`, and
+`sglang`. `jarvis init` can offer an already-running engine first, and your engine
+choice can change the model. The bands use whole-number GB values and assume one
+GPU; the formulas below determine the exact result.
+
+| System RAM (no reported VRAM) | GPU VRAM (one GPU) | Recommended model | Download estimate |
+|-------------------------------|--------------------|-------------------|-------------------|
+| 5–14 GB | 1–8 GB | `qwen3.5:2b` | ~1.1 GB |
 | 15–24 GB | 9–17 GB | `qwen3.5:4b` | ~2.2 GB |
 | 25–44 GB | 18–35 GB | `qwen3.5:9b` | ~5.0 GB |
 | 45 GB or more | 36 GB or more | `qwen3.5:27b` | ~14.9 GB |
 
-The two memory columns are alternatives, not requirements to satisfy together: when
-a GPU reporting VRAM is detected the model is sized against VRAM, otherwise against
-system RAM.
+The two memory columns are alternatives: when a GPU reports VRAM, the recommendation
+uses VRAM across all detected GPUs; otherwise it uses system RAM. On Apple Silicon,
+detection reports unified system memory as GPU memory.
 
 ### How the model is chosen
 
@@ -265,10 +270,11 @@ system RAM.
 
 | Detected | Usable memory |
 |----------|---------------|
-| GPU reporting VRAM | `VRAM × GPU count × 0.9` |
+| GPU reporting VRAM | `VRAM × max(GPU count, 1) × 0.9` |
 | No GPU, or VRAM unavailable | `(total RAM − 4 GB) × 0.8` |
 
-That figure then selects the first tier it fits:
+For the Qwen3.5 tier engines, a positive usable-memory value selects the first
+tier it fits:
 
 | Usable memory | Model |
 |---------------|-------|
@@ -277,34 +283,37 @@ That figure then selects the first tier it fits:
 | Up to 32 GB | `qwen3.5:9b` |
 | More than 32 GB | `qwen3.5:27b` |
 
-All four are Qwen3.5 MoE models, which activate only a fraction of their parameters
-per token — a 27B model activates 3B — so quality per gigabyte is better than a
-dense model of the same size.
+All four recommended Qwen3.5 models are dense. The table describes the current
+selection rule, not a guarantee that a model will fit or run well on every device
+in a band.
 
 ### Inference engine
 
-The detected GPU vendor selects the engine:
+The detected GPU vendor and reported name select the engine:
 
 | Detected GPU | Engine |
 |--------------|--------|
-| None | `llamacpp` |
-| Apple Silicon | `mlx` |
-| NVIDIA consumer (GeForce, RTX) | `ollama` |
-| NVIDIA datacenter (A100, H100, H200, L40, A10, A30) | `vllm` |
-| AMD consumer (Radeon) | `lemonade` |
-| AMD datacenter (MI300, MI325, MI350, MI355) | `vllm` |
+| None or unrecognized GPU vendor | `llamacpp` |
+| Apple GPU | `mlx` |
+| NVIDIA name containing A100, H100, H200, L40, A10, or A30 | `vllm` |
+| Other NVIDIA | `ollama` |
+| AMD name containing MI300, MI325, MI350, or MI355 | `vllm` |
+| Other AMD (including Radeon) | `lemonade` |
+
+When `lemonade` is selected and usable memory is positive, `jarvis init` instead
+recommends `Qwen3.6-35B-A3B-GGUF`. The Qwen3.5 tier and download tables above do
+not apply to that default.
 
 See [Setting Up an Inference Backend](#setting-up-an-inference-backend) for
 installing the engine `jarvis init` picks.
 
 ### Minimum
 
-There is no enforced CPU minimum — any x86-64 or ARM64 processor supported by your
-Python build will run OpenJarvis, and core count affects CPU-only inference speed
-rather than whether a model loads.
+The recommendation code imposes no CPU minimum. CPU-only inference speed depends
+on your processor and core count.
 
 Memory is the real floor. With 4 GB of RAM or less and no GPU, usable memory
-computes to zero and no local model is recommended.
+is zero or less and no local model is recommended.
 
 !!! tip "Low-memory and headless machines"
     You do not need a local model at all. Point OpenJarvis at a hosted API with the
@@ -313,9 +322,9 @@ computes to zero and no local model is recommended.
 
 ### Storage
 
-Model weights dominate disk usage — between ~1.1 GB and ~14.9 GB for the defaults
-above. Budget additional space for the Python environment and whichever inference
-engine you install.
+Model weights dominate disk usage — the estimates above range from ~1.1 GB to
+~14.9 GB for the Qwen3.5 defaults. Budget additional space for the Python
+environment and whichever inference engine you install.
 
 !!! note "Overriding the detected defaults"
     These are defaults, not limits. The generated config records what was detected
