@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -128,3 +129,9 @@ class TestFTS5Search:
         assert store.search("   ") == []
         assert store.search("---") == []
         assert store.search("???") == []
+
+    def test_search_surfaces_database_errors(self, store):
+        store._conn.execute("DROP TABLE traces_fts")
+
+        with pytest.raises(sqlite3.OperationalError, match="no such table"):
+            store.search("trace")

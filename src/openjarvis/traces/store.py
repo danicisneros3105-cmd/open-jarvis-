@@ -257,10 +257,7 @@ class TraceStore:
             params.append(agent)
         sql += " ORDER BY rank LIMIT ?"
         params.append(limit)
-        try:
-            rows = self._conn.execute(sql, params).fetchall()
-        except sqlite3.OperationalError:
-            return []
+        rows = self._conn.execute(sql, params).fetchall()
         return [
             {
                 "trace_id": r[0],
