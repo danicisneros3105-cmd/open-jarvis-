@@ -232,7 +232,7 @@ def _is_unsupported_temperature_error(exc: Exception) -> bool:
     """True if an OpenAI 400 says the model rejects a non-default temperature.
 
     Some models (e.g. gpt-5) only accept the default temperature and return
-    ``code: unsupported_value`` for ``param: temperature`` (see #426). We
+    ``code: unsupported_value`` for ``param: temperature`` (see #426, #1019). We
     can't enumerate every such model up front, so detect the error and retry
     without temperature — mirroring the tools-400 retry in the local engines.
     """
@@ -244,6 +244,8 @@ def _is_unsupported_temperature_error(exc: Exception) -> bool:
         or "unsupported value" in message
         or "only the default" in message
         or "does not support" in message
+        or "unsupported parameter" in message
+        or "is not supported" in message
     )
 
 
@@ -266,6 +268,26 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> flo
     input_cost = (prompt_tokens / 1_000_000) * prices[0]
     output_cost = (completion_tokens / 1_000_000) * prices[1]
     return input_cost + output_cost
+
+
+def _first_choice_or_raise(resp: Any, *, provider: str, model: str) -> Any:
+    """Return the first completion choice or surface the provider error."""
+    choices = getattr(resp, "choices", None)
+    if choices:
+        return choices[0]
+
+    error = getattr(resp, "error", None)
+    if isinstance(error, dict):
+        detail = str(error.get("message") or error)
+    elif error is not None:
+        detail = str(getattr(error, "message", None) or error)
+    else:
+        detail = ""
+
+    message = f"{provider} returned no choices for model {model!r}"
+    raise EngineConnectionError(
+        message + (f": {detail}" if detail else " and no error message")
+    )
 
 
 def _serialize_anthropic_block(block: Any) -> Dict[str, Any]:
@@ -682,7 +704,7 @@ class CloudEngine(InferenceEngine):
             else:
                 raise
         elapsed = time.monotonic() - t0
-        choice = resp.choices[0]
+        choice = _first_choice_or_raise(resp, provider="OpenAI", model=model)
         usage = resp.usage
         prompt_tokens = usage.prompt_tokens if usage else 0
         completion_tokens = usage.completion_tokens if usage else 0
@@ -1025,7 +1047,7 @@ class CloudEngine(InferenceEngine):
         t0 = time.monotonic()
         resp = self._openrouter_client.chat.completions.create(**create_kwargs)
         elapsed = time.monotonic() - t0
-        choice = resp.choices[0]
+        choice = _first_choice_or_raise(resp, provider="OpenRouter", model=actual_model)
         usage = resp.usage
         prompt_tokens = usage.prompt_tokens if usage else 0
         completion_tokens = usage.completion_tokens if usage else 0
@@ -1147,7 +1169,7 @@ class CloudEngine(InferenceEngine):
         t0 = time.monotonic()
         resp = self._minimax_client.chat.completions.create(**create_kwargs)
         elapsed = time.monotonic() - t0
-        choice = resp.choices[0]
+        choice = _first_choice_or_raise(resp, provider="MiniMax", model=model)
         usage = resp.usage
         prompt_tokens = usage.prompt_tokens if usage else 0
         completion_tokens = usage.completion_tokens if usage else 0
@@ -1197,7 +1219,7 @@ class CloudEngine(InferenceEngine):
         t0 = time.monotonic()
         resp = self._deepseek_client.chat.completions.create(**create_kwargs)
         elapsed = time.monotonic() - t0
-        choice = resp.choices[0]
+        choice = _first_choice_or_raise(resp, provider="DeepSeek", model=model)
         usage = resp.usage
         prompt_tokens = usage.prompt_tokens if usage else 0
         completion_tokens = usage.completion_tokens if usage else 0
