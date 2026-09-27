@@ -14,7 +14,7 @@ from openjarvis.cli import gui_cmd
 
 
 def test_gui_custom_ports_use_project_root_and_same_origin_proxy(
-    tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     frontend = tmp_path / "frontend"
     frontend.mkdir()
