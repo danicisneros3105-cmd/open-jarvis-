@@ -26,12 +26,28 @@ def _frontend_dir() -> Path | None:
     return None
 
 
-def _wait_for_port(host: str, port: int, timeout: float = 20.0) -> bool:
+def _check_frontend_port(port: int) -> None:
+    """Reject a port already bound by another local application."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", port))
+    except OSError as exc:
+        raise click.ClickException(
+            f"Frontend port {port} is unavailable. Choose another with --frontend-port."
+        ) from exc
+
+
+def _wait_for_port(
+    process: subprocess.Popen[bytes], host: str, port: int, timeout: float = 20.0
+) -> bool:
+    """Wait for this launch's frontend process to listen on the requested port."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return False
         try:
             with socket.create_connection((host, port), timeout=0.5):
-                return True
+                return process.poll() is None
         except OSError:
             time.sleep(0.2)
     return False
@@ -39,7 +55,12 @@ def _wait_for_port(host: str, port: int, timeout: float = 20.0) -> bool:
 
 def _ensure_frontend_dependencies(frontend: Path, npm: str) -> None:
     """Install frontend dependencies when this checkout has not been bootstrapped."""
-    vite = frontend / "node_modules" / ".bin" / ("vite.cmd" if sys.platform == "win32" else "vite")
+    vite = (
+        frontend
+        / "node_modules"
+        / ".bin"
+        / ("vite.cmd" if sys.platform == "win32" else "vite")
+    )
     if vite.exists():
         return
     click.echo("Installing graphical frontend dependencies...", err=True)
@@ -50,13 +71,18 @@ def _ensure_frontend_dependencies(frontend: Path, npm: str) -> None:
     )
     if result.returncode != 0:
         raise click.ClickException(
-            "Could not install frontend dependencies. Run `npm install` in the frontend directory."
+            "Could not install frontend dependencies. "
+            "Run `npm install` in the frontend directory."
         )
 
 
 @click.command()
-@click.option("--frontend-port", default=5173, show_default=True, type=int)
-@click.option("--api-port", default=8000, show_default=True, type=int)
+@click.option(
+    "--frontend-port", default=5173, show_default=True, type=click.IntRange(1, 65535)
+)
+@click.option(
+    "--api-port", default=8000, show_default=True, type=click.IntRange(1, 65535)
+)
 @click.option("--no-server", is_flag=True, help="Do not start the API server.")
 @click.option("--no-browser", is_flag=True, help="Only start the frontend.")
 def gui(frontend_port: int, api_port: int, no_server: bool, no_browser: bool) -> None:
@@ -70,13 +96,15 @@ def gui(frontend_port: int, api_port: int, no_server: bool, no_browser: bool) ->
     if frontend is None:
         raise click.ClickException(
             "The graphical frontend is not available in this installation. "
-            "Download the OpenJarvis desktop app or run this command from a source checkout."
+            "Download the OpenJarvis desktop app or run this command "
+            "from a source checkout."
         )
     npm = shutil.which("npm") or shutil.which("npm.cmd")
     if npm is None:
         raise click.ClickException(
             "Node.js/npm is required for graphical mode. Install Node.js 22 or newer."
         )
+    _check_frontend_port(frontend_port)
     _ensure_frontend_dependencies(frontend, npm)
 
     if not no_server:
@@ -87,22 +115,48 @@ def gui(frontend_port: int, api_port: int, no_server: bool, no_browser: bool) ->
                 "Install uv or use --no-server with an already-running API."
             )
         server = subprocess.run(
-            [uv, "run", "--extra", "desktop", "jarvis", "start", "--port", str(api_port)],
+            [
+                uv,
+                "run",
+                "--extra",
+                "desktop",
+                "jarvis",
+                "start",
+                "--port",
+                str(api_port),
+            ],
+            cwd=frontend.parent,
             check=False,
         )
         if server.returncode != 0:
             raise click.ClickException("Could not start the OpenJarvis API server.")
 
     env = os.environ.copy()
-    env["VITE_API_URL"] = f"http://127.0.0.1:{api_port}"
+    # Let browser requests use Vite's same-origin proxy at any frontend port.
+    # VITE_API_URL is exposed to browser code, so clear an inherited override.
+    env["VITE_API_URL"] = ""
+    env["OPENJARVIS_VITE_PROXY_TARGET"] = f"http://127.0.0.1:{api_port}"
     process = subprocess.Popen(
-        [npm, "run", "dev", "--", "--host", "127.0.0.1", "--port", str(frontend_port)],
+        [
+            npm,
+            "run",
+            "dev",
+            "--",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(frontend_port),
+            "--strictPort",
+        ],
         cwd=frontend,
         env=env,
     )
-    if not _wait_for_port("127.0.0.1", frontend_port):
+    if not _wait_for_port(process, "127.0.0.1", frontend_port):
         process.terminate()
-        raise click.ClickException("The graphical frontend did not start in time.")
+        process.wait()
+        raise click.ClickException(
+            "The graphical frontend did not start on the requested port."
+        )
 
     url = f"http://127.0.0.1:{frontend_port}"
     console.print(f"[green]OpenJarvis graphical mode is ready:[/green] {url}")
