@@ -2091,6 +2091,7 @@ const MANAGED_CLOUD_KEY_NAMES: &[&str] = &[
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     "OPENROUTER_API_KEY",
+    "ATLASCLOUD_API_KEY",
     "MINIMAX_API_KEY",
     "TAVILY_API_KEY",
 ];
@@ -3426,9 +3427,10 @@ mod tests {
     use super::{
         boot_plan, default_local_model, discard_pending_inference_setup_at,
         format_extension_import_failure, format_missing_rust_toolchain, format_port_unavailable,
-        format_uv_sync_failure, format_uv_sync_spawn_error, matching_installed_model,
-        model_names_match, normalize_host, parse_configured_inference_config,
-        parse_ollama_model_names, persist_confirmed_inference_config_at, preferred_installed_model,
+        format_uv_sync_failure, format_uv_sync_spawn_error, managed_cloud_key_names,
+        matching_installed_model, model_names_match, normalize_host,
+        parse_configured_inference_config, parse_ollama_model_names,
+        persist_confirmed_inference_config_at, preferred_installed_model,
         reload_cloud_keys_for_owned_backend_at, should_persist_resolved_model, spawn_owned_child,
         stage_pending_inference_config_at, startup_installed_model, upsert_engine_host,
         uv_sync_stderr_tail, BackendManager, InferenceConfig, InferenceCredentialStore,
@@ -3438,6 +3440,11 @@ mod tests {
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn atlas_cloud_key_is_loaded_with_managed_desktop_keys() {
+        assert!(managed_cloud_key_names().contains(&"ATLASCLOUD_API_KEY".to_string()));
+    }
 
     #[derive(Default)]
     struct MemoryCredentialStore {

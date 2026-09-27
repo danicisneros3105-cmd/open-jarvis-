@@ -1123,6 +1123,9 @@ OpenJarvis respects the following environment variables:
 | `YOUDOTCOM_API_KEY` | API key for the You.com web search engine. Optional — raises the keyless free-tier limits and enables You.com Contents extraction for URL queries. |
 | `OPENJARVIS_WEB_SEARCH_ENGINE` | Web search engine for the `web_search` tool: `auto` (default), `youcom`, `tavily`, or `duckduckgo`. |
 
+In the desktop app, you can save `ATLASCLOUD_API_KEY` in **Cloud Models** or
+**Settings → API Keys** instead of setting an environment variable.
+
 ## Next Steps
 
 - [Quick Start](quickstart.md) — Run your first query
