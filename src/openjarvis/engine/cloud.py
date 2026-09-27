@@ -1115,7 +1115,9 @@ class CloudEngine(InferenceEngine):
         if tool_choice is not None:
             create_kwargs["tool_choice"] = tool_choice
         t0 = time.monotonic()
-        resp = self._atlascloud_client.chat.completions.create(**create_kwargs)
+        resp = _chat_completion_with_temperature_retry(
+            self._atlascloud_client, create_kwargs
+        )
         elapsed = time.monotonic() - t0
         choice = resp.choices[0]
         usage = resp.usage
@@ -1693,7 +1695,9 @@ class CloudEngine(InferenceEngine):
         tool_choice = kwargs.pop("tool_choice", None)
         if tool_choice is not None:
             create_kwargs["tool_choice"] = tool_choice
-        resp = self._atlascloud_client.chat.completions.create(**create_kwargs)
+        resp = _chat_completion_with_temperature_retry(
+            self._atlascloud_client, create_kwargs
+        )
         for chunk in resp:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
