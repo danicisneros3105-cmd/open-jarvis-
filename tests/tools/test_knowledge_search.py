@@ -114,6 +114,41 @@ class TestKnowledgeSearchTool:
         assert result.success is False
         assert "No knowledge store configured" in result.content
 
+    def test_filter_empty_string_parameters_ignored(self, store):
+        """Empty or whitespace strings in filter parameters are ignored."""
+        tool = KnowledgeSearchTool(store=store)
+        result = tool.execute(
+            query="Kubernetes migration",
+            source="",
+            doc_type="   ",
+            author="",
+            since="",
+            until=" ",
+        )
+        assert result.success is True
+        assert "Kubernetes migration" in result.content
+        assert result.metadata["num_results"] >= 1
+
+    def test_top_k_none_or_invalid_handled_gracefully(self, store):
+        """top_k as None, empty string, or invalid falls back to default safely."""
+        tool = KnowledgeSearchTool(store=store)
+        for bad_top_k in (None, "", "invalid", -5, 0):
+            result = tool.execute(query="Kubernetes", top_k=bad_top_k)
+            assert result.success is True
+            assert result.metadata["num_results"] >= 1
+
+    def test_retrieval_failure_surfaces_error_tool_result(self, monkeypatch, store):
+        """Exceptions raised during retrieval return a failed ToolResult."""
+        tool = KnowledgeSearchTool(store=store)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("database corrupted")
+
+        monkeypatch.setattr(store, "retrieve", _boom)
+        result = tool.execute(query="Kubernetes")
+        assert result.success is False
+        assert "Knowledge search failed: database corrupted" in result.content
+
     def test_spec_has_filter_params(self):
         """ToolSpec.parameters includes all required and optional filter fields."""
         tool = KnowledgeSearchTool()
