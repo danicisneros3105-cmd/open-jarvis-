@@ -406,6 +406,13 @@ def test_retrieve_empty_string_filters_do_not_suppress_results(
     assert results[0].metadata.get("source") == "notion"
 
 
+def test_retrieve_non_string_source_does_not_drop_filter(ks: KnowledgeStore) -> None:
+    """Unexpected filter types must not broaden a source-restricted query."""
+    _store(ks, content="Deployment notes for project alpha", source="notion")
+
+    assert ks.retrieve("deployment", source=42) == []  # type: ignore[arg-type]
+
+
 def test_memory_store_event_emitted(tmp_path: Path) -> None:
     """MEMORY_STORE event is published on store()."""
     from openjarvis.core.events import EventType, get_event_bus, reset_event_bus

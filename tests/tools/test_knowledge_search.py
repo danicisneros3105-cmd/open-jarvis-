@@ -132,10 +132,34 @@ class TestKnowledgeSearchTool:
     def test_top_k_none_or_invalid_handled_gracefully(self, store):
         """top_k as None, empty string, or invalid falls back to default safely."""
         tool = KnowledgeSearchTool(store=store)
-        for bad_top_k in (None, "", "invalid", -5, 0):
+        for bad_top_k in (None, "", "invalid", -5, 0, float("inf")):
             result = tool.execute(query="Kubernetes", top_k=bad_top_k)
             assert result.success is True
             assert result.metadata["num_results"] >= 1
+
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        (
+            ("source", 42),
+            ("doc_type", ["email"]),
+            ("author", True),
+            ("since", ["2026-01-01"]),
+            ("until", {"date": "2026-02-01"}),
+        ),
+    )
+    def test_non_string_filter_returns_failure(self, store, name, value):
+        tool = KnowledgeSearchTool(store=store)
+        result = tool.execute(query="Kubernetes", **{name: value})
+        assert result.success is False
+        assert f"Invalid {name} filter" in result.content
+
+    def test_missing_fts_table_surfaces_database_error(self, store):
+        tool = KnowledgeSearchTool(store=store)
+        store._conn.execute("DROP TABLE knowledge_fts")
+
+        result = tool.execute(query="Kubernetes")
+        assert result.success is False
+        assert "no such table: knowledge_fts" in result.content
 
     def test_retrieval_failure_surfaces_error_tool_result(self, monkeypatch, store):
         """Exceptions raised during retrieval return a failed ToolResult."""

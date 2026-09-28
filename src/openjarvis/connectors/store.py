@@ -370,7 +370,9 @@ class KnowledgeStore(MemoryBackend):
         fts_query = " OR ".join(f'"{term}"' for term in terms)
 
         def _clean_str(val: Optional[str]) -> Optional[str]:
-            return val.strip() if isinstance(val, str) and val.strip() else None
+            if isinstance(val, str):
+                return val.strip() or None
+            return val
 
         source_val = _clean_str(source)
         doc_type_val = _clean_str(doc_type)
@@ -431,9 +433,12 @@ class KnowledgeStore(MemoryBackend):
 
         try:
             rows = self._conn.execute(sql, [fts_query] + params + [top_k]).fetchall()
-        except sqlite3.OperationalError:
-            # Malformed FTS query — return empty rather than crash
-            return []
+        except sqlite3.OperationalError as exc:
+            # Only malformed FTS expressions are empty searches. Other SQLite
+            # failures must reach callers rather than masquerade as no matches.
+            if str(exc).lower().startswith("fts5: syntax error"):
+                return []
+            raise
 
         results: List[RetrievalResult] = []
         for row in rows:

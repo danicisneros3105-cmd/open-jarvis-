@@ -112,15 +112,26 @@ class KnowledgeSearchTool(BaseTool):
         raw_top_k = params.get("top_k")
         try:
             top_k: int = int(raw_top_k) if raw_top_k not in (None, "") else 10
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             top_k = 10
         top_k = max(1, top_k)
 
-        source: Optional[str] = (params.get("source") or "").strip() or None
-        doc_type: Optional[str] = (params.get("doc_type") or "").strip() or None
-        author: Optional[str] = (params.get("author") or "").strip() or None
-        since: Optional[str] = (params.get("since") or "").strip() or None
-        until: Optional[str] = (params.get("until") or "").strip() or None
+        filters: dict[str, Optional[str]] = {}
+        for name in ("source", "doc_type", "author", "since", "until"):
+            value = params.get(name)
+            if value is not None and not isinstance(value, str):
+                return ToolResult(
+                    tool_name="knowledge_search",
+                    content=f"Invalid {name} filter: expected a string.",
+                    success=False,
+                )
+            filters[name] = value.strip() or None if value else None
+
+        source = filters["source"]
+        doc_type = filters["doc_type"]
+        author = filters["author"]
+        since = filters["since"]
+        until = filters["until"]
 
         try:
             if self._retriever is not None:
