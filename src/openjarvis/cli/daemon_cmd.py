@@ -23,6 +23,10 @@ _LOG_FILE = DEFAULT_CONFIG_DIR / "server.log"
 # and `restart` fall back to the config defaults and misreport (or silently
 # move) the port whenever `start` was given an explicit --host/--port.
 _STATE_FILE = DEFAULT_CONFIG_DIR / "server.json"
+# How long `start` waits for the spawned server to register its own PID and
+# bound address before reporting back. Generous: the first start of the day
+# imports torch and warms the engine registry.
+_START_TIMEOUT = 30.0
 
 
 def _pid_alive(pid: int) -> bool:
@@ -93,13 +97,37 @@ def _write_pid(
     """Write PID, plus the address the daemon actually bound to."""
     with _state_lock():
         existing = _read_pid_file()
+        current = _read_state()
+        # A bare pid file with no matching state is treated as a real server,
+        # so an interrupted older writer is never silently taken over.
+        existing_ready = (
+            current.get("ready", True) if current.get("pid") == existing else True
+        )
+
+        if not ready:
+            # A launcher reserving the slot for a process it just spawned.
+            # `start` checked the slot was free before spawning, so a server
+            # that has since registered itself is that child - and it knows
+            # its real PID and bound address. Never replace those with a
+            # request. (Previously this only short-circuited when the
+            # registered PID equalled ours, which the trampoline case below
+            # guarantees it does not.)
+            if existing is not None and existing_ready and _pid_alive(existing):
+                return
+        elif existing is not None and not existing_ready:
+            # A real server registering the address it just bound, over a
+            # launcher's reservation. The reservation must not block it: by
+            # definition no server had bound when it was written, and on
+            # Windows it holds the wrong PID entirely. A uv venv's
+            # .venv\Scripts\python.exe is a trampoline that re-execs the real
+            # interpreter in a NEW process, so the `proc.pid` that `start`
+            # reserved is the trampoline's, not ours. Before this, every
+            # `jarvis start` / `jarvis gui` on Windows died here with
+            # "Another server is already registered" (#1062).
+            existing = None
+
         if existing is not None and existing != pid and _pid_alive(existing):
             raise RuntimeError(f"Another server is already registered (PID {existing})")
-        current = _read_state()
-        if not ready and current.get("pid") == pid and current.get("ready", True):
-            # The child may have finished binding before its parent records
-            # the spawn. Never replace that actual address with a request.
-            return
         secure_write_text(_PID_FILE, str(pid))
         if host or port is not None:
             state = {"pid": pid, "host": host, "port": port}
@@ -236,9 +264,38 @@ def start(
         terminate_process(proc.pid, grace_seconds=10.0)
         raise click.ClickException(str(exc)) from exc
 
+    # Adopt the PID the server reports for itself. `proc.pid` is only a
+    # reservation: on Windows it is the uv trampoline wrapping the real
+    # interpreter (see _write_pid), so `jarvis stop` would kill the wrapper
+    # and leave the daemon running headless. Waiting here also means we stop
+    # announcing success for a server that died during startup.
+    server_pid = proc.pid
+    url_label = "Requested URL"
+    deadline = time.monotonic() + _START_TIMEOUT
+    while time.monotonic() < deadline:
+        state = _read_state()
+        if state.get("ready", True) and state.get("pid"):
+            server_pid = state["pid"]
+            bind_host, bind_port = state["host"], state["port"]
+            url_label = "URL"
+            break
+        if proc.poll() is not None:
+            clear_server_state(proc.pid)
+            raise click.ClickException(
+                f"Server exited with code {proc.returncode} during startup. "
+                f"See {_LOG_FILE} for the traceback."
+            )
+        time.sleep(0.2)
+    else:
+        console.print(
+            f"[yellow]Server did not report readiness within "
+            f"{_START_TIMEOUT:.0f}s; still starting.[/yellow]\n"
+            f"  Check {_LOG_FILE}, then 'jarvis status'."
+        )
+
     console.print(
-        f"[green]OpenJarvis server starting[/green] (PID {proc.pid})\n"
-        f"  Requested URL: {_server_url(bind_host, bind_port)}\n"
+        f"[green]OpenJarvis server started[/green] (PID {server_pid})\n"
+        f"  {url_label}: {_server_url(bind_host, bind_port)}\n"
         f"  Log: {_LOG_FILE}"
     )
 
