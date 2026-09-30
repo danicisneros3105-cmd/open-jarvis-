@@ -68,6 +68,9 @@ class FileReadTool(BaseTool):
                 success=False,
             )
         path = Path(file_path)
+        if not path.is_absolute() and self._allowed_dirs:
+            # A relative name means "inside the sandbox", not the process cwd.
+            path = self._allowed_dirs[0] / path
         # Block sensitive files (secrets, credentials, keys)
         from openjarvis.security.file_policy import is_sensitive_file
 

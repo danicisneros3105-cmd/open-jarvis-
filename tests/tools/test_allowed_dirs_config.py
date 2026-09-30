@@ -44,3 +44,13 @@ def test_config_allowed_dirs_restricts_file_write(tmp_path, monkeypatch) -> None
     tool = FileWriteTool()
     assert tool.execute(path=str(inside / "a.txt"), content="x").success
     assert not tool.execute(path=str(tmp_path / "b.txt"), content="x").success
+
+
+def test_relative_path_resolves_inside_first_allowed_dir(tmp_path: Path) -> None:
+    box = tmp_path / "box"
+    box.mkdir()
+    write = FileWriteTool(allowed_dirs=[str(box)])
+    assert write.execute(path="n.txt", content="hi").success
+    assert (box / "n.txt").read_text() == "hi"
+    read = FileReadTool(allowed_dirs=[str(box)])
+    assert read.execute(path="n.txt").content == "hi"
