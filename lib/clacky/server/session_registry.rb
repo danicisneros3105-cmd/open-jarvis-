@@ -1,0 +1,578 @@
+# frozen_string_literal: true
+
+require "set"
+
+module Clacky
+  module Server
+    # SessionRegistry is the single authoritative source for session state.
+    #
+    # It owns two concerns:
+    #   1. Runtime state  — agent instance, thread, status, pending_task, idle_timer.
+    #   2. Session list   — reads from disk (via session_manager) and enriches with
+    #                       live runtime status. `list` is the only place the session
+    #                       list is assembled; no callers should build it elsewhere.
+    #
+    # Lazy restore: `ensure(session_id)` loads a disk session into the registry on
+    # demand. All session-specific APIs call this before touching the registry so
+    # disk-only sessions (e.g. loaded via loadMore) just work transparently.
+    #
+    # Thread safety: all public methods are protected by a Mutex.
+    class SessionRegistry
+      SESSION_TIMEOUT = 24 * 60 * 60 # 24 hours of inactivity before cleanup
+
+      # Statuses that mean "no agent thread is working" and are therefore
+      # eligible for eviction / stale cleanup. :awaiting_feedback is included
+      # so a question the user never answers cannot pin an agent in memory.
+      RECLAIMABLE_STATUSES = [:idle, :awaiting_feedback].freeze
+
+      def initialize(session_manager: nil, session_restorer: nil, agent_config:)
+        @sessions         = {}
+        @mutex            = Mutex.new
+        @session_manager  = session_manager
+        @session_restorer = session_restorer
+        @agent_config     = agent_config
+        # Tracks sessions currently being restored from disk.
+        # Other threads calling ensure() for the same id will wait via @restore_cond
+        # instead of seeing a half-built session (agent=nil).
+        @restoring        = {}
+        @restore_cond     = ConditionVariable.new
+      end
+
+      # Create a new (empty) session entry and return its id.
+      # agent/ui/thread are set later via with_session once they are constructed.
+      def create(session_id:)
+        raise ArgumentError, "session_id is required" if session_id.nil? || session_id.empty?
+
+        session = {
+          id:                   session_id,
+          status:               :idle,
+          error:                nil,
+          error_code:           nil,
+          top_up_url:           nil,
+          raw_message:          nil,
+          updated_at:           nil,
+          agent:                nil,
+          ui:                   nil,
+          thread:               nil,
+          epoch:                0,
+          idle_timer:           nil,
+          pending_task:         nil,
+          pending_working_dir:  nil
+        }
+
+        @mutex.synchronize { @sessions[session_id] = session }
+        session_id
+      end
+
+      # Ensure a session is in the registry, loading from disk if necessary.
+      # Returns true if the session is now available, false if not found anywhere.
+      #
+      # Thread-safe: if two threads race on the same session_id, the second one
+      # waits for the first to finish restoring (including agent construction) rather
+      # than seeing a half-built entry with agent=nil.
+      def ensure(session_id)
+        session_data = nil
+
+        @mutex.synchronize do
+          # Another thread is currently restoring this session (including the case where
+          # @registry.create was already called but with_session agent-set is not yet done) —
+          # wait for it to finish so callers never see agent=nil.
+          if @restoring[session_id]
+            @restore_cond.wait(@mutex) until !@restoring[session_id]
+            return @sessions.key?(session_id)
+          end
+
+          # Already fully ready (not being restored) — fast path.
+          return true if @sessions.key?(session_id)
+
+          return false unless @session_manager && @session_restorer
+
+          session_data = @session_manager.load(session_id)
+          return false unless session_data
+
+          # Mark as "restore in progress" so concurrent callers wait.
+          @restoring[session_id] = true
+        end
+
+        # Run the (potentially slow) restore outside the mutex so other sessions
+        # are not blocked during agent construction.
+        begin
+          @session_restorer.call(session_data)
+        ensure
+          @mutex.synchronize do
+            @restoring.delete(session_id)
+            @restore_cond.broadcast
+          end
+        end
+
+        @sessions.key?(session_id)
+      end
+
+      # Restore at most n sessions per source as a hot cache at startup.
+      # Everything else is loaded on demand via ensure(id).
+      def restore_from_disk(n: 2)
+        return unless @session_manager && @session_restorer
+
+        all = @session_manager.all_sessions
+          .sort_by { |s| s[:created_at] || "" }
+          .reverse
+
+        counts = Hash.new(0)
+        all.each do |session_data|
+          src = (session_data[:source] || "manual").to_s
+          next if counts[src] >= n
+          next if exist?(session_data[:session_id])
+          begin
+            @session_restorer.call(session_data)
+            counts[src] += 1
+          rescue => e
+            Clacky::Logger.warn(
+              "[SessionRegistry] skip session #{session_data[:session_id]}: " \
+              "#{e.class}: #{e.message}"
+            )
+          end
+        end
+      end
+
+      # Retrieve a session hash by id (returns nil if not found).
+      def get(session_id)
+        @mutex.synchronize { @sessions[session_id]&.dup }
+      end
+
+      # Update arbitrary runtime fields of a session (status, error, pending_*, etc.).
+      def update(session_id, **fields)
+        @mutex.synchronize do
+          session = @sessions[session_id]
+          return false unless session
+
+          fields[:updated_at] = Time.now
+          session.merge!(fields)
+          true
+        end
+      end
+
+      # Atomically bump the session's task epoch and return the new value.
+      # Each user message that starts a task claims a fresh epoch; a stale task
+      # thread (interrupted but not yet dead) compares its epoch against the
+      # current one and discards any side effects (status writes, broadcasts)
+      # once it has been superseded.
+      def claim_epoch(session_id)
+        @mutex.synchronize do
+          session = @sessions[session_id]
+          return nil unless session
+
+          session[:epoch] = session[:epoch].to_i + 1
+        end
+      end
+
+      # Current task epoch for a session (0 if none / unknown).
+      def current_epoch(session_id)
+        @mutex.synchronize { @sessions[session_id]&.fetch(:epoch, 0).to_i }
+      end
+
+      # Update fields only if the caller still owns the current epoch. Returns
+      # true if the update was applied, false if the epoch was stale (a newer
+      # task has taken over) or the session is gone.
+      def update_if_epoch(session_id, epoch, **fields)
+        @mutex.synchronize do
+          session = @sessions[session_id]
+          return false unless session
+          return false unless session[:epoch].to_i == epoch.to_i
+
+          fields[:updated_at] = Time.now
+          session.merge!(fields)
+          true
+        end
+      end
+
+      # Return a session list from disk enriched with live registry status.
+      # Sorted by created_at descending (newest first).
+      #
+      # Parameters (all optional, independent):
+      #   source:  "manual"|"cron"|"channel"|"setup"|nil
+      #            nil = no source filter (all sessions)
+      #   profile: "general"|"coding"|nil
+      #            nil = no agent_profile filter
+      #   limit:   max sessions to return (applies to NON-PINNED only; see below)
+      #   before:  ISO8601 cursor — only sessions with created_at < before
+      #             (also applies to NON-PINNED only; pinned items are a separate
+      #             logical section, they should never be paginated away)
+      #   include_pinned: when true (default), all matching pinned sessions are
+      #             always returned on the FIRST page (before == nil) regardless
+      #             of limit. Subsequent pages (before set) contain only
+      #             non-pinned sessions. This guarantees that users who pinned
+      #             an old session always see it at the top of the sidebar,
+      #             even if many newer sessions exist.
+      #
+      # Ordering of the returned array:
+      #   [ ...all_pinned_matching (newest-first), ...non_pinned (newest-first, limited) ]
+      #
+      # source and profile are orthogonal — either can be nil independently.
+      def list(limit: nil, before: nil, q: nil, q_scope: "name", date: nil, type: nil, exclude_type: nil, include_pinned: true, project_id: nil, exclude_project: false)
+        return [] unless @session_manager
+
+        live = @mutex.synchronize do
+          @sessions.transform_values do |s|
+            model_info = s[:agent]&.current_model_info
+            live_name  = s[:agent]&.name
+            live_name  = nil if live_name&.empty?
+          live_cost_source = s[:agent]&.cost_source
+          { status: s[:status], error: s[:error], error_code: s[:error_code], top_up_url: s[:top_up_url], raw_message: s[:raw_message],
+            updated_at: s[:updated_at]&.iso8601,
+            model: model_info&.dig(:model), model_id: model_info&.dig(:id), name: live_name,
+            total_tasks: s[:agent]&.total_tasks, total_cost: s[:agent]&.total_cost,
+            cost_source: live_cost_source,
+            reasoning_effort: s[:agent]&.reasoning_effort,
+            latest_latency: s[:agent]&.latest_latency,
+            card_model: model_info&.dig(:card_model),
+            sub_model: model_info&.dig(:sub_model),
+            sub_model_options: sub_model_options_for(model_info),
+            todos: s[:agent]&.todos }
+          end
+        end
+
+        all = @session_manager.all_sessions  # already sorted newest-first
+
+        # ── type filter (replaces old source/profile split) ──────────────────
+        # type=coding  → agent_profile == "coding"
+        # type=manual/cron/channel/setup → source match (profile=general implied)
+        if type
+          if type == "coding"
+            all = all.select { |s| (s[:agent_profile] || "general").to_s == "coding" }
+          else
+            all = all.select { |s| s_source(s) == type && (s[:agent_profile] || "general").to_s != "coding" }
+          end
+        end
+
+        # ── exclude_type filter ───────────────────────────────────────────────
+        if exclude_type
+          excluded = Array(exclude_type)
+          all = all.reject { |s| excluded.include?(s_source(s)) }
+        end
+
+        # ── project_id filter — when provided, return ONLY sessions belonging
+        #    to the given project (no limit applied by default).
+        all = all.select { |s| s[:project_id].to_s == project_id.to_s } if project_id
+
+        # ── exclude_project filter — exclude sessions that belong to any project.
+        all = all.reject { |s| s[:project_id].to_s.strip != "" } if exclude_project
+
+        # ── date filter (YYYY-MM-DD, matches created_at prefix) ──────────────
+        all = all.select { |s| s[:created_at].to_s.start_with?(date) } if date
+
+        # ── name / id / content search ───────────────────────────────────────
+        content_snippets = nil
+        if q && !q.empty?
+          if q_scope == "content"
+            content_snippets = @session_manager.search_content(q)
+            if content_snippets.empty?
+              all = []
+            else
+              prefix_set = content_snippets.keys.to_set
+              all = all.select { |s| prefix_set.include?((s[:session_id] || "")[0, 8]) }
+            end
+          else
+            q_down = q.downcase
+            id_match_eligible = q_down.match?(/\A[0-9a-f]{6,}\z/)
+            all = all.select { |s|
+              (s[:name] || "").downcase.include?(q_down) ||
+                (id_match_eligible && (s[:session_id] || "").downcase.include?(q_down))
+            }
+          end
+        end
+
+        # ── Split pinned vs non-pinned BEFORE applying `before`/`limit`.
+        # Pinned sessions bypass pagination entirely so an old pinned session
+        # never falls off the first page just because newer sessions exist.
+        # (Regression fix for 0.9.37: previously `all_sessions` was only
+        # sorted by created_at and `limit` cut off old pinned rows, making
+        # them invisible until the user clicked "load more".)
+        pinned, non_pinned = all.partition { |s| s[:pinned] }
+
+        # `before` cursor ONLY applies to non-pinned (paginated) sessions.
+        # Cursor field must match the sort key in all_sessions (updated_at,
+        # falling back to created_at for legacy rows).
+        non_pinned = non_pinned.select { |s| (s[:updated_at] || s[:created_at] || "") < before } if before
+        non_pinned = non_pinned.first(limit) if limit
+
+        # Pinned section: only included on the first page (before == nil) so
+        # "load more" responses don't re-send them. On first page, return ALL
+        # matching pinned sessions regardless of limit.
+        pinned_section = (include_pinned && before.nil?) ? pinned : []
+
+        ordered = pinned_section + non_pinned
+
+        ordered.map do |s|
+          row = build_enriched_row(s, live[s[:session_id]])
+          if content_snippets
+            short = (s[:session_id] || "")[0, 8]
+            snip = content_snippets[short]
+            row[:search_snippet] = snip if snip
+          end
+          row
+        end
+      end
+
+      # Return the same enriched hash that a `list` row would produce, for a
+      # single session — merging on-disk fields with in-memory live fields.
+      # Returns nil if the session is unknown on disk.
+      #
+      # This is the targeted, O(1) counterpart to `list` used by the WS layer
+      # when it only needs one row (e.g. pushing a fresh snapshot to a client
+      # that just (re)subscribed, or broadcasting a status-change update).
+      def snapshot(session_id)
+        return nil unless @session_manager
+        disk = @session_manager.load(session_id)
+        return nil unless disk
+
+        live = @mutex.synchronize do
+          s = @sessions[session_id]
+          next nil unless s
+          model_info = s[:agent]&.current_model_info
+          live_name  = s[:agent]&.name
+          live_name  = nil if live_name&.empty?
+          { status: s[:status], error: s[:error], error_code: s[:error_code], top_up_url: s[:top_up_url], raw_message: s[:raw_message],
+            updated_at: s[:updated_at]&.iso8601,
+            model: model_info&.dig(:model), model_id: model_info&.dig(:id),
+            name: live_name, total_tasks: s[:agent]&.total_tasks,
+            total_cost: s[:agent]&.total_cost, cost_source: s[:agent]&.cost_source,
+            reasoning_effort: s[:agent]&.reasoning_effort,
+            latest_latency: s[:agent]&.latest_latency,
+            card_model: model_info&.dig(:card_model),
+            sub_model: model_info&.dig(:sub_model),
+            sub_model_options: sub_model_options_for(model_info),
+            # Live agent todos take precedence over the stale on-disk copy.
+            # On-disk todos are only persisted when agent.run finishes, so a
+            # snapshot taken mid-run (e.g. right after completing the last
+            # task) would otherwise still return the old list.
+            todos: s[:agent]&.todos }
+        end
+
+        build_enriched_row(disk, live)
+      end
+
+      # Merge a single disk-side session hash with the corresponding live
+      # in-memory agent fields (may be nil) into the row shape the frontend
+      # consumes.
+      private def build_enriched_row(s, ls)
+        id = s[:session_id]
+        {
+          id:            id,
+          name:          ls&.dig(:name) || s[:name] || "",
+          status:        ls ? ls[:status].to_s : "idle",
+          error:         ls ? ls[:error] : nil,
+          error_code:    ls&.dig(:error_code),
+          top_up_url:    ls&.dig(:top_up_url),
+          raw_message:   ls&.dig(:raw_message),
+          model:         ls&.dig(:model),
+          model_id:      ls&.dig(:model_id),
+          card_model:    ls&.dig(:card_model),
+          sub_model:     ls&.dig(:sub_model),
+          sub_model_options: ls&.dig(:sub_model_options) || [],
+          source:        s_source(s),
+          agent_profile: (s[:agent_profile] || "general").to_s,
+          working_dir:   s[:working_dir],
+          created_at:    s[:created_at],
+          updated_at:    ls&.dig(:updated_at) || s[:updated_at],
+          total_tasks:   ls&.dig(:total_tasks) || s.dig(:stats, :total_tasks) || 0,
+          total_cost:    ls&.dig(:total_cost)  || s.dig(:stats, :total_cost_usd) || 0.0,
+          cost_source:   (ls&.dig(:cost_source) || s.dig(:stats, :cost_source) || "estimated").to_s,
+          # latest_latency is in-memory only (live sessions) — not persisted
+          # at the session-level on disk. The on-disk source of truth is
+          # per-assistant-message `latency` fields in messages[]. Reloaded
+          # sessions start with nil and get populated on the next LLM call.
+          latest_latency: ls&.dig(:latest_latency),
+          reasoning_effort: ls&.dig(:reasoning_effort) || s.dig(:config, :reasoning_effort),
+          pinned:        s[:pinned] || false,
+          channel_info:  s[:channel_info],
+          project_id:    s[:project_id],
+          todos:         ls&.dig(:todos) || s[:todos] || [],
+        }
+      end
+
+
+      # Look up the provider preset for the session's current card and
+      # return the sub-model list. Empty when the card's base_url isn't
+      # in any preset (e.g. self-hosted custom endpoints) — the WebUI
+      # treats that as "no sub-model switcher available".
+      private def sub_model_options_for(model_info)
+        return [] unless model_info
+        # Prefer explicitly saved provider_id, fall back to base_url lookup
+        provider_id = model_info[:provider_id].to_s.strip.then { |v| v.empty? ? nil : v }
+        provider_id ||= (model_info[:base_url] && Clacky::Providers.find_by_base_url(model_info[:base_url]))
+        return [] unless provider_id
+        Clacky::Providers.models(provider_id)
+      end
+
+      # Normalize source field from a disk session hash.
+      # "system" is a legacy value renamed to "setup" — treat them as equivalent.
+      def s_source(s)
+        src = (s[:source] || "manual").to_s
+        src == "system" ? "setup" : src
+      end
+
+      public
+
+      # Count + latest updated_at for sessions of a given source, excluding
+      # those assigned to a project (they show in the project section instead).
+      def group_stats(source)
+        return { count: 0, latest_updated_at: nil } unless @session_manager
+        group_all = @session_manager.all_sessions.select { |s| s_source(s) == source && s[:project_id].to_s.strip == "" }
+        latest = group_all.map { |s| s[:updated_at] || s[:created_at] }.compact.max
+        { count: group_all.size, latest_updated_at: latest }
+      end
+
+      # Stats for every folded sidebar group, keyed by source.
+      def group_stats_all
+        SessionManager::GROUPED_SOURCES.to_h { |source| [source, group_stats(source)] }
+      end
+
+      # Delete a session from registry (and interrupt its thread).
+      def delete(session_id)
+        @mutex.synchronize do
+          session = @sessions.delete(session_id)
+          return false unless session
+
+          session[:idle_timer]&.cancel
+          session[:thread]&.raise(Clacky::AgentInterrupted, "Session deleted")
+          true
+        end
+      end
+
+      # True if the session exists in registry (runtime).
+      def exist?(session_id)
+        @mutex.synchronize { @sessions.key?(session_id) }
+      end
+
+      # Execute a block with exclusive access to the raw session hash.
+      def with_session(session_id)
+        @mutex.synchronize do
+          session = @sessions[session_id]
+          return nil unless session
+          yield session
+        end
+      end
+
+      # Remove sessions idle longer than SESSION_TIMEOUT.
+      def cleanup_stale!
+        cutoff = Time.now - SESSION_TIMEOUT
+        @mutex.synchronize do
+          @sessions.delete_if do |_id, session|
+            RECLAIMABLE_STATUSES.include?(session[:status]) && session[:updated_at] < cutoff
+          end
+        end
+      end
+
+      def count_by_status(status)
+        @mutex.synchronize do
+          @sessions.count { |_, s| s[:status] == status }
+        end
+      end
+
+      def max_running_agents
+        @agent_config.max_running_agents
+      end
+
+      def max_idle_agents
+        @agent_config.max_idle_agents
+      end
+
+      def running_full?
+        count_by_status(:running) >= max_running_agents
+      end
+
+      def evict_excess_idle!
+        to_evict = []
+
+        @mutex.synchronize do
+          idle = @sessions.select { |_, s| RECLAIMABLE_STATUSES.include?(s[:status]) && s[:agent] }
+                   .sort_by { |_, s| s[:updated_at] || Time.at(0) }
+
+          while idle.size > max_idle_agents
+            id, session = idle.shift
+            to_evict << [id, session]
+          end
+        end
+
+        to_evict.each { |id, session| persist_and_release(id, session) }
+      end
+
+      # Yield [session_id, agent, thread] for each session that currently has
+      # an in-memory agent. Used by the worker's graceful-shutdown path to
+      # flush any unsaved @history (e.g. a user message added at the start
+      # of Agent#run that hasn't yet reached the save-on-completion branch
+      # in run_agent_task).
+      #
+      # The session id list is snapshotted under the mutex so concurrent
+      # mutations don't disturb iteration; the yield happens outside the
+      # mutex so callers can do slow I/O (JSON serialization, File.write)
+      # without blocking other registry operations.
+      def each_live_agent
+        snapshot = @mutex.synchronize do
+          @sessions.filter_map do |id, s|
+            agent = s[:agent]
+            next nil unless agent
+            [id, agent, s[:thread]]
+          end
+        end
+        snapshot.each { |id, agent, thread| yield id, agent, thread }
+      end
+
+      # Shut down every session's idle-compression timer, waiting for any
+      # in-flight compression to roll back cleanly. Called on worker shutdown
+      # so a hot restart's SIGKILL cannot tear a compression apart between
+      # writing the chunk file and persisting its chunk_path into session.json.
+      def shutdown_all_idle_timers
+        timers = @mutex.synchronize { @sessions.values.filter_map { |s| s[:idle_timer] } }
+        timers.each { |t| t.shutdown rescue nil }
+      end
+
+      private def persist_and_release(id, session)
+        agent = session[:agent]
+        @session_manager&.save(agent.to_session_data(status: :success)) if agent
+
+        @mutex.synchronize do
+          s = @sessions[id]
+          next unless s
+          s[:idle_timer]&.cancel
+          s[:agent] = nil
+          s[:ui] = nil
+          s[:idle_timer] = nil
+          s[:thread] = nil
+          @sessions.delete(id)
+        end
+      end
+
+      # Build a summary hash for API responses (for in-registry sessions).
+      # Used when we need live agent fields (name, cost, etc.) after ensure().
+      def session_summary(session_id)
+        session = @mutex.synchronize { @sessions[session_id] }
+        return nil unless session
+        agent = session[:agent]
+        return nil unless agent
+
+        model_info = agent.current_model_info
+
+        {
+          id:              session[:id],
+          name:            agent.name,
+          working_dir:     agent.working_dir,
+          status:          session[:status],
+          created_at:      agent.created_at,
+          updated_at:      session[:updated_at]&.iso8601 || agent.created_at,
+          total_tasks:     agent.total_tasks || 0,
+          total_cost:      agent.total_cost  || 0.0,
+          cost_source:     agent.cost_source.to_s,
+          error:           session[:error],
+          model:           model_info&.dig(:model),
+          permission_mode: agent.permission_mode,
+          source:          agent.source.to_s,
+          agent_profile:   agent.agent_profile.name,
+          pinned:          agent.pinned || false,
+          latest_latency:  agent.latest_latency,
+          project_id:      agent.project_id,
+        }
+      end
+    end
+  end
+end

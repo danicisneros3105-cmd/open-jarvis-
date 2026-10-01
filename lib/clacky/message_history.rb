@@ -1,0 +1,531 @@
+# frozen_string_literal: true
+
+require "json"
+
+module Clacky
+  # MessageHistory wraps the conversation message list and exposes
+  # business-meaningful operations instead of raw array manipulation.
+  #
+  # Internal fields (task_id, created_at, system_injected, etc.) are kept
+  # in the internal store but stripped when calling #to_api.
+  class MessageHistory
+    # Fields that are internal to the agent and must not be sent to the API.
+    INTERNAL_FIELDS = %i[
+      task_id created_at system_injected session_context memory_update
+      subagent_instructions subagent_result subagent_transcript token_usage
+      compressed_summary chunk_path truncated transient
+      chunk_index chunk_count ext_events skill_command skill_command_display
+      display_files display_references
+    ].freeze
+
+    INTERNAL_CONTENT_BLOCK_FIELDS = %i[image_path image_name].freeze
+
+    # Cap on persisted ext_events per message. These are milestone events
+    # (progress chatter is transient), so a handful per message is the norm —
+    # the cap only exists to stop a runaway extension. Oldest are dropped first.
+    MAX_EXT_EVENTS_PER_MESSAGE = 50
+
+    # Oversized payloads belong in a file, not in session.json (which is
+    # rewritten in full on every save).
+    MAX_EXT_EVENT_BYTES = 8 * 1024
+
+    def initialize(messages = [])
+      @messages = messages.dup
+    end
+
+    # ─────────────────────────────────────────────
+    # Write operations
+    # ─────────────────────────────────────────────
+
+    # Append a single message hash to the history.
+    #
+    # When appending a user message, automatically drop any trailing assistant
+    # message that has unanswered tool_calls (no tool_result follows it).
+    # This prevents API error 2013 ("tool call result does not follow tool call")
+    # when a previous task ended before observe() could append tool results
+    # (e.g. subagent crash, interrupt, or error).
+    def append(message)
+      if message[:role] == "user"
+        drop_dangling_tool_calls!
+      end
+      @messages << deep_sanitize_utf8(message)
+      self
+    end
+
+    # Replace (or insert at head) the system prompt message.
+    # Used by session_serializer#refresh_system_prompt.
+    def replace_system_prompt(content, **extra)
+      msg = { role: "system", content: content }.merge(extra)
+      idx = @messages.index { |m| m[:role] == "system" }
+      if idx
+        @messages[idx] = msg
+      else
+        @messages.unshift(msg)
+      end
+      self
+    end
+
+    # Replace the entire message list (used by compression rebuild).
+    def replace_all(new_messages)
+      @messages = new_messages.map { |m| deep_sanitize_utf8(m) }
+      self
+    end
+
+    # Remove and return the last message.
+    def pop_last
+      @messages.pop
+    end
+
+    # Remove all messages matching the block in-place.
+    # Generic history pruning utility — used by callers that need to
+    # strip transient/system-injected messages out of the persisted
+    # history (e.g. compaction, rollback on 400 errors).
+    def delete_where(&block)
+      @messages.reject!(&block)
+      self
+    end
+
+    # Attach a key/value onto the most recent tool result message matching the
+    # given tool_call_id. Handles both OpenAI-style (role:"tool", tool_call_id)
+    # and Anthropic-style (role:"user" with tool_result blocks) messages.
+    # No-op if no matching message is found.
+    def attach_to_tool_result(tool_call_id, key, value)
+      msg = @messages.reverse.find do |m|
+        (m[:role] == "tool" && m[:tool_call_id] == tool_call_id) ||
+          (m[:role] == "user" && m[:content].is_a?(Array) &&
+            m[:content].any? { |b| b.is_a?(Hash) && b[:type] == "tool_result" && b[:tool_use_id] == tool_call_id })
+      end
+      msg[key] = value if msg
+      self
+    end
+
+    # Settle an interrupted fan-out whose assistant.tool_calls turn is dangling
+    # because the batch was cancelled before any tool result was written. Mirrors
+    # repair_tool_call_pairing (same helpers, same scan) but PERSISTS the result:
+    # for each unanswered tool_call_id it appends a real tool result into
+    # @messages marking it interrupted, riding any captured subagent trails on
+    # the matching one — the same anchor the normal completion path uses. This
+    # keeps the turn protocol-valid so drop_dangling_tool_calls! leaves it alone,
+    # and lets replay render the transcripts. transcripts_by_id maps
+    # tool_call_id => [trail, ...]. No-op unless the last message is a dangling
+    # assistant.tool_calls turn.
+    def settle_interrupted_tool_calls(transcripts_by_id = {})
+      return self unless pending_tool_calls?
+
+      assistant = @messages.last
+      expected_ids = Array(assistant[:tool_calls]).map { |tc| tc[:id] }.compact
+      answered = []
+      @messages.reverse_each do |m|
+        break if m.equal?(assistant)
+
+        answered.concat(tool_result_ids(m)) if tool_result_message?(m)
+      end
+
+      (expected_ids - answered).each do |id|
+        result = {
+          role: "tool",
+          tool_call_id: id,
+          content: '{"interrupted":true,"message":"Interrupted by user before completion"}',
+          task_id: assistant[:task_id],
+          created_at: Time.now.to_f
+        }
+        trails = transcripts_by_id[id]
+        result[:subagent_transcript] = Array(trails) if trails && !trails.empty?
+        @messages << deep_sanitize_utf8(result)
+      end
+      self
+    end
+
+    # Append a custom extension event onto the most recent message so it is
+    # persisted with the session and can be replayed after a reload.
+    # Events are anchored to the last message: on replay they are re-emitted
+    # right after that message, preserving chronological order.
+    # No-op when the history is still empty (nothing to anchor to).
+    def append_ext_event(event)
+      msg = @messages.last
+      return self unless msg
+
+      if JSON.generate(event).bytesize > MAX_EXT_EVENT_BYTES
+        Clacky::Logger.warn("ext event #{event[:type].inspect} dropped: payload exceeds #{MAX_EXT_EVENT_BYTES} bytes")
+        return self
+      end
+
+      list = (msg[:ext_events] ||= [])
+      list.shift while list.size >= MAX_EXT_EVENTS_PER_MESSAGE
+      list << deep_sanitize_utf8(event)
+      self
+    end
+
+    # Mutate the last message matching the predicate lambda in-place.
+    # Used by execute_skill_with_subagent to update instruction messages.
+    def mutate_last_matching(predicate, &block)
+      msg = @messages.reverse.find { |m| predicate.call(m) }
+      block.call(msg) if msg
+      self
+    end
+
+    # Remove all messages from index onward (used by restore_session on error).
+    def truncate_from(index)
+      @messages = @messages[0...index]
+      self
+    end
+
+    # Truncate history starting from the user message with the given created_at timestamp.
+    # Removes that message and everything after it. Returns self.
+    def truncate_from_created_at(created_at)
+      idx = @messages.index { |m| m[:role] == "user" && m[:created_at].to_s == created_at.to_s }
+      return self unless idx
+
+      truncate_from(idx)
+    end
+
+    # Roll back the history to just before the given message object.
+    # Removes the message and anything appended after it.
+    # Used to undo a failed speculative append (e.g. compression message that errored).
+    def rollback_before(message)
+      idx = @messages.index { |m| m.equal?(message) }
+      return self unless idx
+
+      @messages = @messages[0...idx]
+      self
+    end
+
+    # ─────────────────────────────────────────────
+    # Business queries
+    # ─────────────────────────────────────────────
+
+    # True when a system prompt message is present in the history.
+    # Used by inject_session_context to avoid injecting context messages
+    # before the system prompt has been built (which would cause the
+    # guard in run() to skip building it altogether).
+    def has_system_prompt?
+      @messages.any? { |m| m[:role] == "system" }
+    end
+
+    # True when the last assistant message has tool_calls but no
+    # tool_result has been appended yet (would cause a 400 from the API).
+    def pending_tool_calls?
+      return false if @messages.empty?
+
+      last = @messages.last
+      return false unless last[:role] == "assistant" && last[:tool_calls]&.any?
+
+      last_assistant_idx = @messages.rindex { |m| m == last }
+      @messages[(last_assistant_idx + 1)..].none? { |m| m[:role] == "tool" || m[:tool_results] }
+    end
+
+    # Return the session_date value from the most recent session_context message.
+    # Used by inject_session_context_if_needed to avoid re-injecting on the same date.
+    def last_session_context_date
+      msg = @messages.reverse.find { |m| m[:session_context] }
+      msg&.dig(:session_date)
+    end
+
+    # Return the chunk_count from the most recently injected chunk index message.
+    # Used by inject_chunk_index_if_needed to avoid re-injecting when nothing changed.
+    def last_injected_chunk_count
+      msg = @messages.reverse.find { |m| m[:chunk_index] }
+      msg&.dig(:chunk_count) || 0
+    end
+
+    # Return only real (non-system-injected) user messages.
+    def real_user_messages
+      @messages.select { |m| m[:role] == "user" && !m[:system_injected] }
+    end
+
+    # Return the index of the last real (non-system-injected) user message.
+    # Used by restore_session to trim back to a clean state on error.
+    def last_real_user_index
+      @messages.rindex { |m| m[:role] == "user" && !m[:system_injected] }
+    end
+
+    # Return the message with :subagent_instructions set.
+    def subagent_instruction_message
+      @messages.find { |m| m[:subagent_instructions] }
+    end
+
+    # ─────────────────────────────────────────────
+    # Size helpers
+    # ─────────────────────────────────────────────
+
+    def size
+      @messages.size
+    end
+
+    def empty?
+      @messages.empty?
+    end
+
+    # Estimate total token count for all messages.
+    # Uses the ~4 chars/token heuristic (works well for English/code).
+    # Handles string content, array content blocks, and tool_calls.
+    def estimate_tokens
+      @messages.sum { |m| estimate_message_tokens(m) }
+    end
+
+    # ─────────────────────────────────────────────
+    # Output
+    # ─────────────────────────────────────────────
+
+    # Return a clean copy of messages suitable for sending to the LLM API:
+    # - strips internal-only fields
+    # - pads reasoning_content on synthetic assistant messages when the
+    #   conversation is running against a thinking-mode provider
+    #
+    # @param force_reasoning_content_pad [Boolean]
+    #   When true, unconditionally pad every assistant message that lacks a
+    #   reasoning_content field with an empty string. This is set by the
+    #   LLM caller AFTER a 400 "reasoning_content must be passed back" error
+    #   as a one-shot retry signal — the history-evidence heuristic below
+    #   can't fire when the previous turns came from a provider that keeps
+    #   thinking inline (e.g. MiniMax: <think>...</think> in content), so
+    #   this bypass lets us recover on the retry without a server restart.
+    # Convert to API-ready messages. When `task_chain` is given (a Set of
+    # task IDs forming the active task's ancestor chain), messages tagged with
+    # a task_id outside that chain are dropped first — this is the Time Machine
+    # path, ensuring undone/sibling-branch turns never reach the LLM. Messages
+    # without a task_id (system / injected context) are always kept.
+    def to_api(force_reasoning_content_pad: false, task_chain: nil)
+      source = if task_chain
+        @messages.select { |m| !m[:task_id] || task_chain.include?(m[:task_id]) }
+      else
+        @messages
+      end
+      msgs = source.map { |m| strip_for_api(m) }
+      msgs = repair_tool_call_pairing(msgs)
+      ensure_reasoning_content_consistency(msgs, force: force_reasoning_content_pad)
+    end
+
+    # Return a shallow copy of the message list, excluding transient messages.
+    # Transient messages (e.g. brand skill instructions) are valid during the
+    # current session but must not be persisted to session.json.
+    # For serialization, compression, and cloning.
+    def to_a
+      @messages.reject { |m| m[:transient] }.dup
+    end
+
+    # Estimate token count for a single message (role overhead + content).
+    private def estimate_message_tokens(message)
+      # ~4 tokens of overhead per message (role, formatting)
+      tokens = 4
+      tokens += estimate_content_tokens(message[:content])
+
+      # tool_calls: each call adds name + arguments chars
+      if message[:tool_calls].is_a?(Array)
+        message[:tool_calls].each do |tc|
+          tokens += estimate_content_tokens(tc.dig(:function, :name))
+          tokens += estimate_content_tokens(tc.dig(:function, :arguments))
+        end
+      end
+
+      tokens
+    end
+
+    # Estimate tokens from a content value (string, array of blocks, or nil).
+    # Heuristic: ASCII/code ~4 chars/token; CJK/multibyte ~1.5 chars/token.
+    private def estimate_content_tokens(content)
+      case content
+      when String
+        ascii_chars = content.count(" -~")
+        multibyte_chars = content.length - ascii_chars
+        ((ascii_chars / 4.0) + (multibyte_chars / 1.5)).ceil
+      when Array
+        content.sum do |block|
+          block.is_a?(Hash) ? estimate_content_tokens(block[:text] || block["text"]) : 0
+        end
+      else
+        0
+      end
+    end
+
+    # Drop the trailing assistant message if it has tool_calls with no subsequent
+    # tool_result — i.e. the tool call was never answered (dangling).
+    # Called automatically before appending any user message.
+    private def drop_dangling_tool_calls!
+      return unless pending_tool_calls?
+
+      @messages.pop
+    end
+
+    private def strip_for_api(message)
+      msg = strip_internal_fields(message)
+      content = msg[:content]
+      return msg unless content.is_a?(Array)
+
+      cleaned = content.filter_map do |block|
+        next block unless block.is_a?(Hash)
+
+        if block[:type] == "image_url" &&
+            block.dig(:image_url, :url) == "[image stripped]"
+          next nil
+        end
+
+        next block if (block.keys & INTERNAL_CONTENT_BLOCK_FIELDS).empty?
+
+        block.reject { |key, _| INTERNAL_CONTENT_BLOCK_FIELDS.include?(key) }
+      end
+
+      return msg if cleaned == content
+
+      if cleaned.empty?
+        msg.merge(content: "[images were shown to you in a previous turn]")
+      else
+        msg.merge(content: cleaned)
+      end
+    end
+
+    private def strip_internal_fields(message)
+      message.reject { |k, _| INTERNAL_FIELDS.include?(k) }
+    end
+
+    # Defensive integrity pass before sending history to the LLM.
+    # OpenAI-compat protocols (incl. DeepSeek) require every assistant.tool_calls
+    # to be followed by a tool message for each tool_call_id. If a previous turn
+    # was interrupted mid-act() — e.g. a channel user sent a second message
+    # before the first finished — the tool segment may be missing entries,
+    # producing HTTP 400 "insufficient tool messages following tool_calls".
+    # This pass scans the whole history and inserts placeholder tool messages
+    # for any unmatched ids. It is deterministic (same input → same output)
+    # so prompt caching is not disturbed.
+    private def repair_tool_call_pairing(msgs)
+      result = []
+      i = 0
+      while i < msgs.size
+        msg = msgs[i]
+        result << msg
+
+        if msg[:role] == "assistant" && msg[:tool_calls].is_a?(Array) && !msg[:tool_calls].empty?
+          expected_ids = msg[:tool_calls].map { |tc| tc[:id] }.compact
+          seen_ids = []
+
+          j = i + 1
+          while j < msgs.size && tool_result_message?(msgs[j])
+            result << msgs[j]
+            seen_ids.concat(tool_result_ids(msgs[j]))
+            j += 1
+          end
+
+          (expected_ids - seen_ids).each do |id|
+            result << {
+              role: "tool",
+              tool_call_id: id,
+              content: '{"error":"Tool result missing (interrupted)"}'
+            }
+          end
+
+          i = j
+        else
+          i += 1
+        end
+      end
+      result
+    end
+
+    private def tool_result_message?(msg)
+      MessageFormat::OpenAI.tool_result_message?(msg) ||
+        MessageFormat::Anthropic.tool_result_message?(msg)
+    end
+
+    private def tool_result_ids(msg)
+      if MessageFormat::OpenAI.tool_result_message?(msg)
+        MessageFormat::OpenAI.tool_call_ids(msg)
+      else
+        MessageFormat::Anthropic.tool_use_ids(msg)
+      end
+    end
+
+    # Detect thinking-mode providers purely from history content and pad
+    # synthetic assistant messages with an empty reasoning_content when needed.
+    #
+    # WHY: Providers like DeepSeek V4 and Kimi K2 in thinking mode return a
+    # `reasoning_content` field on every assistant turn and REQUIRE the caller
+    # to echo a `reasoning_content` field back on every subsequent assistant
+    # message in the payload — omitting it triggers:
+    #     HTTP 400: "The reasoning_content in the thinking mode must be passed
+    #                back to the API"
+    #
+    # The canonical history contains assistant messages from two sources:
+    #   1. Real LLM responses — carry reasoning_content when returned by the
+    #      provider (preserved in agent.rb via parse_response).
+    #   2. Synthetic / locally-injected messages — skill injection, subagent
+    #      acks, slash-command notices, truncation fallbacks. These are never
+    #      produced by the LLM so they naturally lack reasoning_content.
+    #
+    # RULE: If ANY assistant message in the history carries reasoning_content,
+    # the conversation is provably running against a thinking-mode provider
+    # (the provider itself produced it). In that case, every other assistant
+    # message must echo the field, so we pad with an empty string.
+    #
+    # This is a purely structural inference with no model-name coupling —
+    # it self-adapts to new thinking-mode providers and new synthetic-message
+    # injection sites without any code changes elsewhere.
+    #
+    # For non-thinking providers (Claude / OpenAI / Gemini / Bedrock) no
+    # assistant message ever has reasoning_content, so this is a no-op.
+    # The Anthropic adapter also filters unknown fields via a whitelist, so
+    # even mid-session fallback between providers remains safe.
+    private def ensure_reasoning_content_consistency(msgs, force: false)
+      self.class.pad_reasoning_content_if_needed(msgs, force: force)
+    end
+
+    # Public helper: pad assistant messages that lack a reasoning_content
+    # field with an empty string, either when forced or when the payload
+    # already shows evidence of thinking-mode (at least one assistant
+    # message with reasoning_content).
+    #
+    # Exposed as a class method so Time Machine's active_messages path can
+    # reuse the exact same logic without routing through #to_api.
+    def self.pad_reasoning_content_if_needed(msgs, force: false)
+      should_pad = force || msgs.any? { |m| m[:role] == "assistant" && m[:reasoning_content] }
+      return msgs unless should_pad
+
+      msgs.map do |m|
+        next m unless m[:role] == "assistant"
+        next m if m.key?(:reasoning_content)
+
+        m.merge(reasoning_content: "")
+      end
+    end
+
+    # Defense-in-depth: recursively scrub invalid UTF-8 bytes from every String
+    # stored in the message tree. Even if a tool forgets to scrub its output,
+    # nothing poisoned will ever reach session persistence or JSON.generate.
+    #
+    # Fast path: if the tree contains only valid UTF-8 strings, the original
+    # object is returned unchanged — preserving object identity for callers
+    # that rely on `equal?` (e.g. rollback_before).
+    # Slow path: any invalid byte triggers a rebuild with scrubbed strings
+    # (invalid bytes → U+FFFD).
+    private def deep_sanitize_utf8(obj)
+      case obj
+      when String
+        return obj if obj.encoding == Encoding::UTF_8 && obj.valid_encoding?
+        obj.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}")
+      when Hash
+        return obj unless contains_dirty_utf8?(obj)
+        obj.transform_values { |v| deep_sanitize_utf8(v) }
+      when Array
+        return obj unless contains_dirty_utf8?(obj)
+        obj.map { |v| deep_sanitize_utf8(v) }
+      else
+        obj
+      end
+    end
+
+    # Cheap recursive check: does this subtree contain any invalid-UTF-8 string?
+    # Short-circuits on first offender. Keeps the common case (all valid UTF-8)
+    # allocation-free.
+    private def contains_dirty_utf8?(obj)
+      case obj
+      when String
+        !(obj.encoding == Encoding::UTF_8 && obj.valid_encoding?)
+      when Hash
+        obj.any? { |_, v| contains_dirty_utf8?(v) }
+      when Array
+        obj.any? { |v| contains_dirty_utf8?(v) }
+      else
+        false
+      end
+    end
+  end
+end

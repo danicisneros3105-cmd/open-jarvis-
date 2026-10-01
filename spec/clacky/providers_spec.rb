@@ -1,0 +1,918 @@
+# frozen_string_literal: true
+
+RSpec.describe Clacky::Providers do
+  describe ".preset?" do
+    it "returns true for a known preset id" do
+      expect(described_class.preset?("minimax")).to be true
+      expect(described_class.preset?("kimi")).to be true
+    end
+
+    it "returns false for an unknown id" do
+      expect(described_class.preset?("nope-provider")).to be false
+      expect(described_class.preset?("")).to be false
+      expect(described_class.preset?(nil)).to be false
+    end
+  end
+
+  describe ".capabilities" do
+    it "returns {} for an unknown provider" do
+      expect(described_class.capabilities("nope-provider")).to eq({})
+    end
+
+    it "returns the provider-level capabilities hash when no model override" do
+      # MiniMax declares vision: false at the provider level.
+      expect(described_class.capabilities("minimax")).to eq("vision" => false)
+    end
+
+    it "merges model-level override on top of provider-level defaults" do
+      # openclacky: provider default vision:true, but DeepSeek models override to false.
+      expect(described_class.capabilities("openclacky", model_name: "dsk-deepseek-v4-pro"))
+        .to eq("vision" => false)
+      expect(described_class.capabilities("openclacky", model_name: "abs-claude-opus-4-7"))
+        .to eq("vision" => true)
+    end
+
+    it "falls back to provider-level defaults for unknown model_name" do
+      # Unknown model under a known provider — use provider-level defaults.
+      expect(described_class.capabilities("minimax", model_name: "ghost-model"))
+        .to eq("vision" => false)
+    end
+
+    it "returns a fresh hash so callers cannot mutate internal state" do
+      caps = described_class.capabilities("minimax")
+      caps["vision"] = true
+      # Next call should still report the original value
+      expect(described_class.capabilities("minimax")).to eq("vision" => false)
+    end
+  end
+
+  describe ".supports?" do
+    context "for providers that declare vision: false at provider level" do
+      it "returns false for minimax" do
+        expect(described_class.supports?("minimax", :vision)).to be false
+      end
+
+      it "returns true for kimi (k3/k2.7-code/k2.5/k2.6 are multimodal)" do
+        expect(described_class.supports?("kimi", :vision)).to be true
+      end
+
+      it "returns false for deepseekv4" do
+        expect(described_class.supports?("deepseekv4", :vision)).to be false
+      end
+    end
+
+    context "for providers that declare vision: true at provider level" do
+      it "returns true for openclacky (Claude model)" do
+        expect(described_class.supports?("openclacky", :vision,
+                                         model_name: "abs-claude-opus-4-7")).to be true
+      end
+
+      it "returns true for openclacky without a model_name (provider-wide default)" do
+        expect(described_class.supports?("openclacky", :vision)).to be true
+      end
+
+      it "returns true for openclacky (Claude model)" do
+        expect(described_class.supports?("openclacky", :vision,
+                                         model_name: "abs-claude-sonnet-4-5")).to be true
+      end
+    end
+
+    context "with model-level overrides" do
+      it "returns false for openclacky + DeepSeek models (vision-less sidecar)" do
+        expect(described_class.supports?("openclacky", :vision,
+                                         model_name: "dsk-deepseek-v4-pro")).to be false
+        # V4.1 Flash is natively multimodal, unlike its DeepSeek siblings.
+        expect(described_class.supports?("openclacky", :vision,
+                                         model_name: "dsk-deepseek-flash")).to be true
+      end
+
+      it "returns true for deepseekv4 + V4.1 Flash multimodal override" do
+        expect(described_class.supports?("deepseekv4", :vision)).to be false
+        expect(described_class.supports?("deepseekv4", :vision,
+                                         model_name: "deepseek-flash")).to be true
+        expect(described_class.supports?("deepseekv4", :vision,
+                                         model_name: "deepseek-v4-pro")).to be false
+      end
+
+      it "returns true for openclacky + unknown model (falls back to provider default)" do
+        # Unknown model inherits provider-level vision=true.
+        expect(described_class.supports?("openclacky", :vision,
+                                         model_name: "unknown-model")).to be true
+      end
+    end
+
+    context "for providers with mixed model capabilities" do
+      it "returns false for mimo (default text-only), true for mimo-v2.5 (omni)" do
+        expect(described_class.supports?("mimo", :vision)).to be false
+        expect(described_class.supports?("mimo", :vision,
+                                         model_name: "mimo-v2.5-pro")).to be false
+        expect(described_class.supports?("mimo", :vision,
+                                         model_name: "mimo-v2.5")).to be true
+      end
+
+      it "returns false for glm (default text-only), true for vision SKUs" do
+        expect(described_class.supports?("glm", :vision)).to be false
+        expect(described_class.supports?("glm", :vision,
+                                         model_name: "glm-5.1")).to be false
+        expect(described_class.supports?("glm", :vision,
+                                         model_name: "glm-5v-turbo")).to be true
+        expect(described_class.supports?("glm", :vision,
+                                         model_name: "glm-5.3-flash")).to be true
+        expect(described_class.supports?("glm", :vision,
+                                         model_name: "glm-5.3-flashx")).to be true
+      end
+    end
+
+    context "for OpenAI (GPT) provider" do
+      it "returns true for vision (GPT-5.x and o-series are multimodal)" do
+        expect(described_class.supports?("openai", :vision)).to be true
+        expect(described_class.supports?("openai", :vision, model_name: "gpt-5.5")).to be true
+        expect(described_class.supports?("openai", :vision, model_name: "gpt-5.4")).to be true
+        expect(described_class.supports?("openai", :vision, model_name: "gpt-5.4-mini")).to be true
+        expect(described_class.supports?("openai", :vision, model_name: "o4-mini")).to be true
+      end
+
+      it "resolves default model to gpt-5.5" do
+        expect(described_class.default_model("openai")).to eq("gpt-5.5")
+      end
+
+      it "returns correct lite model mappings" do
+        expect(described_class.lite_model("openai", "gpt-5.6-sol")).to eq("gpt-5.6-luna")
+        expect(described_class.lite_model("openai", "gpt-5.6-terra")).to eq("gpt-5.6-luna")
+        expect(described_class.lite_model("openai", "gpt-5.5")).to eq("gpt-5.4-mini")
+        expect(described_class.lite_model("openai", "gpt-5.4")).to eq("gpt-5.4-mini")
+      end
+
+      it "returns nil lite for models without lite pairing" do
+        expect(described_class.lite_model("openai", "o4-mini")).to be_nil
+        expect(described_class.lite_model("openai", "o3")).to be_nil
+        expect(described_class.lite_model("openai", "gpt-5.4-nano")).to be_nil
+      end
+
+      it "has correct base_url and api type" do
+        expect(described_class.base_url("openai")).to eq("https://api.openai.com/v1")
+        expect(described_class.api_type("openai")).to eq("openai-completions")
+      end
+
+      it "includes expected models" do
+        expect(described_class.models("openai")).to include("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "o4-mini", "o3")
+      end
+    end
+
+    context "for Ollama (Cloud) provider" do
+      it "resolves default model to deepseek-v4-flash" do
+        expect(described_class.default_model("ollama")).to eq("deepseek-v4-flash")
+      end
+
+      it "has correct base_url and api type" do
+        expect(described_class.base_url("ollama")).to eq("https://ollama.com")
+        expect(described_class.api_type("ollama")).to eq("openai-completions")
+      end
+
+      it "includes expected cloud models" do
+        expect(described_class.models("ollama")).to include(
+          "glm-5.2", "kimi-k3", "glm-5.1",
+          "deepseek-v4-pro", "deepseek-v4-flash",
+          "gemini-3-flash-preview", "minimax-m3"
+        )
+        # Ollama's subscription-billed open-weight models carry no per-token
+        # price, so they stay out of the picker.
+        expect(described_class.models("ollama")).not_to include(
+          "gemma4", "qwen3.5", "nemotron-3-super", "nemotron-3-ultra",
+          "nemotron-3-nano", "mistral-large-3", "gpt-oss"
+        )
+        expect(described_class.models("ollama")).not_to include(
+          "qwen3-coder:480b-cloud", "gpt-oss:120b-cloud",
+          "gpt-oss:20b-cloud", "deepseek-v3.1:671b-cloud"
+        )
+      end
+
+      it "returns correct lite model mappings" do
+        expect(described_class.lite_model("ollama", "glm-5.2")).to eq("glm-5.1")
+        expect(described_class.lite_model("ollama", "kimi-k3")).to eq("kimi-k2.6")
+        expect(described_class.lite_model("ollama", "deepseek-v4-pro")).to eq("deepseek-v4-flash")
+        expect(described_class.lite_model("ollama", "gemini-3-flash-preview")).to eq("deepseek-v4-flash")
+      end
+
+      it "returns nil lite for models without lite pairing" do
+        expect(described_class.lite_model("ollama", "glm-5.1")).to be_nil
+        expect(described_class.lite_model("ollama", "minimax-m2.7")).to be_nil
+      end
+
+      it "enforces vision capabilities correctly" do
+        # Vision-capable models
+        expect(described_class.supports?("ollama", :vision, model_name: "kimi-k3")).to be true
+        expect(described_class.supports?("ollama", :vision, model_name: "minimax-m3")).to be true
+        # Text-only models
+        expect(described_class.supports?("ollama", :vision, model_name: "glm-5.2")).to be false
+        expect(described_class.supports?("ollama", :vision, model_name: "deepseek-v4-pro")).to be false
+        expect(described_class.supports?("ollama", :vision, model_name: "deepseek-v4-flash")).to be false
+        expect(described_class.supports?("ollama", :vision, model_name: "minimax-m2.7")).to be false
+      end
+
+      it "resolves provider by base_url" do
+        expect(described_class.find_by_base_url("https://ollama.com")).to eq("ollama")
+        expect(described_class.find_by_base_url("https://ollama.com/v1/chat/completions")).to eq("ollama")
+      end
+
+      it "has a website_url for API keys" do
+        preset = described_class::PRESETS["ollama"]
+        expect(preset["website_url"]).to eq("https://ollama.com/settings/keys")
+      end
+
+      it "has a default_ocr_model" do
+        expect(described_class.default_ocr_model("ollama")).to eq("kimi-k2.7-code")
+      end
+    end
+
+    context "for OrcaRouter provider" do
+      it "resolves default model to openai/gpt-5.5" do
+        expect(described_class.default_model("orcarouter")).to eq("openai/gpt-5.5")
+      end
+
+      it "has correct base_url and api type" do
+        expect(described_class.base_url("orcarouter")).to eq("https://api.orcarouter.ai/v1")
+        expect(described_class.api_type("orcarouter")).to eq("openai-completions")
+      end
+
+      it "includes expected models" do
+        expect(described_class.models("orcarouter")).to include(
+          "openai/gpt-5.5", "openai/gpt-5.4-mini",
+          "anthropic/claude-sonnet-5", "anthropic/claude-haiku-4.5",
+          "google/gemini-3.5-flash", "deepseek/deepseek-v4-flash",
+          "z-ai/glm-5.2"
+        )
+        expect(described_class.models("orcarouter")).not_to include("orcarouter/auto")
+      end
+
+      it "returns correct lite model mappings" do
+        expect(described_class.lite_model("orcarouter", "anthropic/claude-sonnet-5")).to eq("anthropic/claude-haiku-4.5")
+        expect(described_class.lite_model("orcarouter", "anthropic/claude-opus-4.8")).to eq("anthropic/claude-haiku-4.5")
+        expect(described_class.lite_model("orcarouter", "openai/gpt-5.5")).to eq("openai/gpt-5.4-mini")
+        expect(described_class.lite_model("orcarouter", "openai/gpt-5.4")).to eq("openai/gpt-5.4-mini")
+      end
+
+      it "enforces vision capabilities correctly" do
+        # Vision-capable models
+        expect(described_class.supports?("orcarouter", :vision, model_name: "openai/gpt-5.5")).to be true
+        expect(described_class.supports?("orcarouter", :vision, model_name: "anthropic/claude-sonnet-5")).to be true
+        expect(described_class.supports?("orcarouter", :vision, model_name: "google/gemini-3.5-flash")).to be true
+        # Text-only models
+        expect(described_class.supports?("orcarouter", :vision, model_name: "deepseek/deepseek-v4-flash")).to be false
+        expect(described_class.supports?("orcarouter", :vision, model_name: "z-ai/glm-5.2")).to be false
+      end
+
+      it "resolves provider by base_url" do
+        expect(described_class.find_by_base_url("https://api.orcarouter.ai/v1")).to eq("orcarouter")
+        expect(described_class.find_by_base_url("https://api.orcarouter.ai/v1/chat/completions")).to eq("orcarouter")
+      end
+
+      it "has a website_url for API keys" do
+        preset = described_class::PRESETS["orcarouter"]
+        expect(preset["website_url"]).to eq("https://www.orcarouter.ai")
+      end
+
+      it "has a default_ocr_model" do
+        expect(described_class.default_ocr_model("orcarouter")).to eq("google/gemini-3.5-flash")
+      end
+    end
+
+    context "for Requesty provider" do
+      it "resolves default model to claude-sonnet-4-6" do
+        expect(described_class.default_model("requesty")).to eq("claude-sonnet-4-6")
+      end
+
+      it "has correct base_url and api type" do
+        expect(described_class.base_url("requesty")).to eq("https://router.requesty.ai/v1")
+        expect(described_class.api_type("requesty")).to eq("openai-completions")
+      end
+
+      it "includes expected models" do
+        expect(described_class.models("requesty")).to include(
+          "claude-sonnet-4-6", "claude-haiku-4-5",
+          "gpt-5.5", "gpt-5.4-mini", "gemini-3.8-flash"
+        )
+      end
+
+      it "returns correct lite model mappings" do
+        expect(described_class.lite_model("requesty", "claude-sonnet-4-6")).to eq("claude-haiku-4-5")
+        expect(described_class.lite_model("requesty", "claude-opus-4-8")).to eq("claude-haiku-4-5")
+        expect(described_class.lite_model("requesty", "gpt-5.6-sol")).to eq("gpt-5.6-luna")
+        expect(described_class.lite_model("requesty", "gpt-5.5")).to eq("gpt-5.4-mini")
+        expect(described_class.lite_model("requesty", "claude-haiku-4-5")).to be_nil
+      end
+
+      it "resolves provider by base_url, including the EU endpoint" do
+        expect(described_class.find_by_base_url("https://router.requesty.ai/v1")).to eq("requesty")
+        expect(described_class.find_by_base_url("https://router.requesty.ai/v1/chat/completions")).to eq("requesty")
+        expect(described_class.find_by_base_url("https://router.eu.requesty.ai/v1")).to eq("requesty")
+      end
+
+      it "has a website_url for API keys" do
+        preset = described_class::PRESETS["requesty"]
+        expect(preset["website_url"]).to eq("https://app.requesty.ai/api-keys")
+      end
+
+      it "has a default_ocr_model" do
+        expect(described_class.default_ocr_model("requesty")).to eq("gemini-3.8-flash")
+      end
+    end
+
+    context "conservative default (unknown or undeclared)" do
+      it "returns true for an unknown provider_id" do
+        # Custom base_urls map to nil provider_id; assume capability supported
+        # rather than over-aggressively downgrading.
+        expect(described_class.supports?("nope-provider", :vision)).to be true
+      end
+
+      it "returns true for a provider that does not declare the capability at all" do
+        # anthropic preset has no capabilities block — default to true.
+        expect(described_class.supports?("anthropic", :vision)).to be true
+      end
+
+      it "returns true for a brand new capability name the presets don't know" do
+        expect(described_class.supports?("minimax", :some_future_capability)).to be true
+      end
+    end
+
+    it "accepts capability name as String or Symbol" do
+      expect(described_class.supports?("minimax", "vision")).to be false
+      expect(described_class.supports?("minimax", :vision)).to be false
+    end
+  end
+
+  describe ".resolve_provider" do
+    it "prefers base_url when it matches a known preset" do
+      expect(described_class.resolve_provider(
+               base_url: "https://api.openclacky.com", api_key: nil
+             )).to eq("openclacky")
+    end
+
+    it "returns the base_url match even when api_key belongs to a different family" do
+      # base_url wins over api_key heuristic — users explicitly pointed there.
+      expect(described_class.resolve_provider(
+               base_url: "https://api.deepseek.com", api_key: "clacky-abc"
+             )).to eq("deepseekv4")
+    end
+
+    it "falls back to clacky-* api_key prefix when base_url is unknown (local-debug proxy)" do
+      expect(described_class.resolve_provider(
+               base_url: "http://localhost:3100", api_key: "clacky-af2a576"
+             )).to eq("openclacky")
+    end
+
+    it "treats localhost / 127.0.0.1 / 0.0.0.0 as openclacky regardless of api_key (local-proxy debug)" do
+      expect(described_class.resolve_provider(
+               base_url: "http://localhost:9999", api_key: "sk-generic"
+             )).to eq("openclacky")
+      expect(described_class.resolve_provider(
+               base_url: "http://127.0.0.1:8080", api_key: nil
+             )).to eq("openclacky")
+      expect(described_class.resolve_provider(
+               base_url: "http://0.0.0.0:3100/v1", api_key: ""
+             )).to eq("openclacky")
+    end
+
+    it "returns nil when base_url is an unknown public host and api_key is not clacky-*" do
+      expect(described_class.resolve_provider(
+               base_url: "https://example.com/v1", api_key: "sk-generic"
+             )).to be_nil
+    end
+
+    it "resolves openai by base_url" do
+      expect(described_class.resolve_provider(
+               base_url: "https://api.openai.com/v1", api_key: nil
+             )).to eq("openai")
+    end
+
+    it "returns nil when both base_url and api_key are missing" do
+      expect(described_class.resolve_provider(base_url: nil, api_key: nil)).to be_nil
+    end
+  end
+
+  describe ".find_by_base_url with endpoint_variants" do
+    # Regression guard for C-5563: providers that expose multiple regional
+    # / billing-plan endpoints must be recognised regardless of which URL
+    # the user configured, so capability checks (vision=false for GLM
+    # text models, MiniMax text-only) fire correctly.
+
+    context "GLM (Zhipu / Z.ai) four endpoints" do
+      it "recognises mainland pay-as-you-go" do
+        expect(described_class.find_by_base_url("https://open.bigmodel.cn/api/paas/v4"))
+          .to eq("glm")
+      end
+
+      it "recognises mainland Coding Plan (subpath variant)" do
+        # Distinct from paas/v4 — must not be matched as a prefix of the
+        # canonical URL, and must be identified as glm via endpoint_variants.
+        expect(described_class.find_by_base_url("https://open.bigmodel.cn/api/coding/paas/v4"))
+          .to eq("glm")
+      end
+
+      it "recognises international pay-as-you-go (api.z.ai)" do
+        expect(described_class.find_by_base_url("https://api.z.ai/api/paas/v4"))
+          .to eq("glm")
+      end
+
+      it "recognises international Coding Plan (api.z.ai)" do
+        expect(described_class.find_by_base_url("https://api.z.ai/api/coding/paas/v4"))
+          .to eq("glm")
+      end
+
+      it "recognises endpoint subpaths under any variant" do
+        expect(described_class.find_by_base_url("https://api.z.ai/api/coding/paas/v4/chat/completions"))
+          .to eq("glm")
+      end
+
+      it "ensures capability detection fires for all four URLs + text model (C-5563 fix)" do
+        [
+          "https://open.bigmodel.cn/api/paas/v4",
+          "https://open.bigmodel.cn/api/coding/paas/v4",
+          "https://api.z.ai/api/paas/v4",
+          "https://api.z.ai/api/coding/paas/v4"
+        ].each do |url|
+          id = described_class.find_by_base_url(url)
+          # vision=false must be enforced for text-only GLM models regardless
+          # of which endpoint the user picked; this is the whole point of
+          # declaring endpoint_variants.
+          expect(described_class.supports?(id, :vision, model_name: "glm-5.1"))
+            .to be(false), "expected vision=false at #{url}"
+          # vision model still reports true (per-model override).
+          expect(described_class.supports?(id, :vision, model_name: "glm-5v-turbo"))
+            .to be(true), "expected vision=true at #{url} for glm-5v-turbo"
+        end
+      end
+    end
+
+    context "MiMo (Xiaomi) two billing endpoints" do
+      # The Token Plan subscription endpoint (token-plan-cn.xiaomimimo.com) is a
+      # distinct domain from the pay-as-you-go API (api.xiaomimimo.com) but
+      # serves the same V2.5 lineup, so both must resolve to "mimo" — otherwise
+      # Token Plan users hit "unknown provider" and the vision=true default
+      # leaks images into the text-only mimo-v2.5-pro.
+      it "recognises pay-as-you-go and Token Plan endpoints" do
+        %w[
+          https://api.xiaomimimo.com/v1
+          https://token-plan-cn.xiaomimimo.com/v1
+        ].each do |url|
+          expect(described_class.find_by_base_url(url)).to eq("mimo")
+        end
+      end
+
+      it "recognises endpoint subpaths" do
+        expect(described_class.find_by_base_url("https://token-plan-cn.xiaomimimo.com/v1/chat/completions"))
+          .to eq("mimo")
+      end
+
+      it "enforces vision matrix across both endpoints" do
+        %w[
+          https://api.xiaomimimo.com/v1
+          https://token-plan-cn.xiaomimimo.com/v1
+        ].each do |url|
+          id = described_class.find_by_base_url(url)
+          expect(described_class.supports?(id, :vision, model_name: "mimo-v2.5-pro"))
+            .to be(false), "expected vision=false at #{url} for mimo-v2.5-pro"
+          expect(described_class.supports?(id, :vision, model_name: "mimo-v2.5"))
+            .to be(true), "expected vision=true at #{url} for mimo-v2.5"
+        end
+      end
+    end
+
+    context "GLM default model and lineup" do
+      it "resolves default model to glm-5.3" do
+        expect(described_class.default_model("glm")).to eq("glm-5.3")
+      end
+
+      it "lists only the current GLM 5.2 and 5.3 lineup" do
+        expect(described_class.models("glm")).to eq(
+          ["glm-5.3", "glm-5.3-flashx", "glm-5.3-flash", "glm-5.2"]
+        )
+        expect(described_class.default_ocr_model("glm")).to eq("glm-5.3-flash")
+      end
+    end
+
+    context "Volcengine Ark (Doubao) three endpoints" do
+      # Regression guard: Ark base_urls (Pay-as-you-go / Coding Plan / Agent
+      # Plan) must resolve to the volcengine-ark preset so text-only models
+      # (glm-5.2, DeepSeek-V4) report vision=false and route through OCR
+      # instead of being inlined into a model that rejects image input.
+      it "recognises all three endpoints" do
+        %w[
+          https://ark.cn-beijing.volces.com/api/v3
+          https://ark.cn-beijing.volces.com/api/coding/v3
+          https://ark.cn-beijing.volces.com/api/plan/v3
+        ].each do |url|
+          expect(described_class.find_by_base_url(url)).to eq("volcengine-ark")
+        end
+      end
+
+      it "recognises endpoint subpaths" do
+        expect(described_class.find_by_base_url("https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions"))
+          .to eq("volcengine-ark")
+      end
+
+      it "lists the refreshed Ark lineup" do
+        models = described_class.models("volcengine-ark")
+        expect(models).to include(
+          "kimi-k3", "glm-5.3-flash", "doubao-seed-2.0-mini"
+        )
+        # Subscription-only preview with no per-token price.
+        expect(models).not_to include("kimi-k2.8-preview")
+        expect(models).not_to include("kimi-k2.6", "minimax-m2.7")
+      end
+
+      it "enforces vision matrix across all endpoints" do
+        %w[
+          https://ark.cn-beijing.volces.com/api/v3
+          https://ark.cn-beijing.volces.com/api/coding/v3
+          https://ark.cn-beijing.volces.com/api/plan/v3
+        ].each do |url|
+          id = described_class.find_by_base_url(url)
+          expect(described_class.supports?(id, :vision, model_name: "glm-5.3"))
+            .to be(false), "expected vision=false at #{url} for glm-5.3"
+          expect(described_class.supports?(id, :vision, model_name: "glm-5.2"))
+            .to be(false), "expected vision=false at #{url} for glm-5.2"
+          expect(described_class.supports?(id, :vision, model_name: "deepseek-v4-pro"))
+            .to be(false), "expected vision=false at #{url} for deepseek-v4-pro"
+          expect(described_class.supports?(id, :vision, model_name: "doubao-seed-2.1-pro"))
+            .to be(true), "expected vision=true at #{url} for doubao-seed-2.1-pro"
+          expect(described_class.supports?(id, :vision, model_name: "kimi-k2.7-code"))
+            .to be(true), "expected vision=true at #{url} for kimi-k2.7-code"
+          expect(described_class.supports?(id, :vision, model_name: "glm-5.3-flash"))
+            .to be(true), "expected vision=true at #{url} for glm-5.3-flash"
+        end
+      end
+
+      it "resolves default model and OCR model" do
+        expect(described_class.default_model("volcengine-ark")).to eq("doubao-seed-2.1-pro")
+        expect(described_class::PRESETS["volcengine-ark"]["default_ocr_model"]).to eq("doubao-seed-2.0-lite")
+      end
+
+      describe ".resolve_api_model" do
+        let(:base) { "https://ark.cn-beijing.volces.com" }
+
+        it "swaps display names for versioned ids on the pay-as-you-go endpoint" do
+          {
+            "doubao-seed-2.0-lite"  => "doubao-seed-2-0-lite-260428",
+            "doubao-seed-2.0-mini"  => "doubao-seed-2-0-mini-260428",
+            "doubao-seed-2.1-pro"   => "doubao-seed-2-1-pro-260628",
+            "doubao-seed-2.1-turbo" => "doubao-seed-2-1-turbo-260628",
+            "glm-5.2"               => "glm-5-2-260617",
+            "deepseek-v4-pro"       => "deepseek-v4-pro-260425",
+            "deepseek-v4-flash"     => "deepseek-v4-flash-260425"
+          }.each do |display, real|
+            expect(described_class.resolve_api_model(base_url: "#{base}/api/v3", model: display))
+              .to eq(real), "expected #{display} -> #{real} on payg"
+          end
+        end
+
+        it "keeps display names unchanged on Coding and Agent Plan endpoints" do
+          ["#{base}/api/coding/v3", "#{base}/api/plan/v3"].each do |url|
+            expect(described_class.resolve_api_model(base_url: url, model: "doubao-seed-2.1-pro"))
+              .to eq("doubao-seed-2.1-pro")
+            expect(described_class.resolve_api_model(base_url: url, model: "glm-5.2"))
+              .to eq("glm-5.2")
+          end
+        end
+
+        it "leaves models without an alias unchanged on payg" do
+          # glm-5.3 has no payg alias yet (Ark pay-as-you-go has not listed it);
+          # it stays a display-name pass-through until a versioned id is known.
+          %w[
+            doubao-seed-evolving
+            kimi-k2.7-code
+            kimi-k2.8-preview
+            kimi-k3
+            minimax-m3
+            glm-5.3
+            glm-5.3-flash
+          ].each do |m|
+            expect(described_class.resolve_api_model(base_url: "#{base}/api/v3", model: m)).to eq(m)
+          end
+        end
+
+        it "normalises a trailing slash on the endpoint url" do
+          expect(described_class.resolve_api_model(base_url: "#{base}/api/v3/", model: "doubao-seed-2.1-turbo"))
+            .to eq("doubao-seed-2-1-turbo-260628")
+        end
+
+        it "leaves models unchanged for unrelated providers" do
+          expect(described_class.resolve_api_model(base_url: "https://api.openai.com/v1", model: "doubao-seed-2.1-pro"))
+            .to eq("doubao-seed-2.1-pro")
+        end
+      end
+    end
+
+    context "MiniMax regional endpoints" do
+      it "recognises mainland China endpoint (.com)" do
+        expect(described_class.find_by_base_url("https://api.minimaxi.com/v1"))
+          .to eq("minimax")
+      end
+
+      it "recognises international endpoint (.io)" do
+        expect(described_class.find_by_base_url("https://api.minimax.io/v1"))
+          .to eq("minimax")
+      end
+
+      it "enforces vision=false on every regional endpoint" do
+        [
+          "https://api.minimaxi.com/v1",
+          "https://api.minimax.io/v1"
+        ].each do |url|
+          expect(described_class.supports?(described_class.find_by_base_url(url), :vision))
+            .to be(false), "expected vision=false at #{url}"
+        end
+      end
+
+      it "lists the current lineup (M3 + M2.7 + M2.5) and M3 overrides vision" do
+        preset = described_class::PRESETS["minimax"]
+        expect(preset["models"]).to eq(["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"])
+        expect(described_class.supports?("minimax", :vision, model_name: "MiniMax-M3"))
+          .to be(true)
+        expect(described_class.supports?("minimax", :vision, model_name: "MiniMax-M2.7"))
+          .to be(false)
+      end
+    end
+
+    context "Kimi (Moonshot) two regional endpoints" do
+      it "does not offer the retired kimi-k2.5 model" do
+        expect(described_class.models("kimi")).to eq(
+          ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"]
+        )
+      end
+
+      it "recognises mainland (.cn)" do
+        expect(described_class.find_by_base_url("https://api.moonshot.cn/v1"))
+          .to eq("kimi")
+      end
+
+      it "recognises international (.ai)" do
+        expect(described_class.find_by_base_url("https://api.moonshot.ai/v1"))
+          .to eq("kimi")
+      end
+
+      it "keeps vision=true on both endpoints" do
+        # Unlike GLM/MiniMax, Kimi's current models support vision — so the
+        # whole point of declaring variants here is purely to let capability
+        # detection (fallback chains, provider-specific behaviours) wire up
+        # correctly, not to force vision=false.
+        ["https://api.moonshot.cn/v1", "https://api.moonshot.ai/v1"].each do |url|
+          expect(described_class.supports?(described_class.find_by_base_url(url), :vision))
+            .to be(true), "expected vision=true at #{url}"
+        end
+      end
+    end
+
+    context "Anthropic current model lineup" do
+      it "includes the Claude 5 family without changing the default" do
+        expect(described_class.models("anthropic")).to include(
+          "claude-sonnet-5", "claude-opus-5", "claude-fable-5", "claude-fable-5-1"
+        )
+        expect(described_class.default_model("anthropic")).to eq("claude-sonnet-4-6")
+      end
+    end
+
+    context "Kimi Code (Coding Plan) — separate from PAYG Kimi" do
+      # The subscription-billed Coding Plan endpoint is its own preset, not
+      # an endpoint_variant of "kimi" — different domain (api.kimi.com vs
+      # api.moonshot.{cn,ai}), different model alias (kimi-for-coding vs
+      # kimi-k3/k2.7-code/k2.6), different transport (anthropic-messages vs
+      # openai-completions). These tests guard that the routing actually
+      # discriminates instead of folding into the PAYG preset.
+      it "recognises the canonical /coding base URL" do
+        expect(described_class.find_by_base_url("https://api.kimi.com/coding"))
+          .to eq("kimi-coding")
+      end
+
+      it "recognises the OpenAI-compat /coding/v1 sub-path" do
+        # find_by_base_url uses prefix matching, so the OpenAI-compat URL
+        # documented for Roo Code et al. resolves to the same preset.
+        expect(described_class.find_by_base_url("https://api.kimi.com/coding/v1"))
+          .to eq("kimi-coding")
+      end
+
+      it "is anthropic-messages — not openai-completions like PAYG kimi" do
+        expect(described_class.api_type("kimi-coding")).to eq("anthropic-messages")
+        expect(described_class.api_type("kimi"))
+          .to eq("openai-completions") # sanity: PAYG preset stays as it was
+      end
+
+      it "uses the kimi-for-coding model alias as the only registered model" do
+        expect(described_class.models("kimi-coding")).to eq(["kimi-for-coding"])
+        expect(described_class.default_model("kimi-coding")).to eq("kimi-for-coding")
+      end
+
+      it "supports vision (K2.6 backend handles image input)" do
+        expect(described_class.supports?("kimi-coding", :vision)).to be true
+      end
+    end
+
+    it "returns nil for an unknown URL unrelated to any preset or variant" do
+      expect(described_class.find_by_base_url("https://api.unknown-provider.example/v1"))
+        .to be_nil
+    end
+
+    it "still recognises the canonical base_url when endpoint_variants is absent" do
+      # Anthropic has no endpoint_variants — should behave exactly as before.
+      expect(described_class.find_by_base_url("https://api.anthropic.com"))
+        .to eq("anthropic")
+    end
+  end
+
+  describe ".api_type_for_model" do
+    it "returns the provider-level api when no overrides are defined" do
+      # openai preset has no model_api_overrides → always returns "openai-completions"
+      expect(described_class.api_type_for_model("openai", "gpt-5.5"))
+        .to eq("openai-completions")
+    end
+
+    it "returns nil for an unknown provider" do
+      expect(described_class.api_type_for_model("no-such-provider", "anything")).to be_nil
+    end
+
+    it "routes OpenRouter anthropic/* models to anthropic-messages" do
+      # This is the core fix: native Anthropic endpoint preserves cache_control
+      # byte-for-byte, avoiding ~10% prompt-cache misses through the OpenAI shim.
+      expect(described_class.api_type_for_model("openrouter", "anthropic/claude-sonnet-4-6"))
+        .to eq("anthropic-messages")
+      expect(described_class.api_type_for_model("openrouter", "anthropic/claude-opus-4-7"))
+        .to eq("anthropic-messages")
+    end
+
+    it "also matches bare claude-* aliases on OpenRouter" do
+      expect(described_class.api_type_for_model("openrouter", "claude-sonnet-4-6"))
+        .to eq("anthropic-messages")
+      expect(described_class.api_type_for_model("openrouter", "claude-3.5-haiku"))
+        .to eq("anthropic-messages")
+    end
+
+    it "keeps non-Claude OpenRouter models on the OpenAI shim" do
+      # Gemini, GPT, DeepSeek etc. are best served through /chat/completions.
+      expect(described_class.api_type_for_model("openrouter", "google/gemini-3-pro"))
+        .to eq("openai-responses")
+      expect(described_class.api_type_for_model("openrouter", "openai/gpt-5.5"))
+        .to eq("openai-responses")
+      expect(described_class.api_type_for_model("openrouter", "openai/gpt-5.6-luna"))
+        .to eq("openai-responses")
+      expect(described_class.api_type_for_model("openrouter", "deepseek/deepseek-v4-pro"))
+        .to eq("openai-responses")
+    end
+    it "tolerates a nil model_name by returning the provider default" do
+      expect(described_class.api_type_for_model("openrouter", nil)).to eq("openai-responses")
+    end
+
+    context "with a user_override" do
+      it "returns the explicit override regardless of preset resolution" do
+        expect(described_class.api_type_for_model("openrouter", "anthropic/claude-sonnet-4-6",
+                                                  user_override: "openai-completions"))
+          .to eq("openai-completions")
+      end
+
+      it "can force anthropic-messages on a provider that defaults to completions" do
+        expect(described_class.api_type_for_model("openrouter", "deepseek/deepseek-v4-pro",
+                                                  user_override: "anthropic-messages"))
+          .to eq("anthropic-messages")
+      end
+
+      it "treats nil and empty-string overrides as absent (auto)" do
+        expect(described_class.api_type_for_model("openrouter", "anthropic/claude-sonnet-4-6",
+                                                  user_override: nil))
+          .to eq("anthropic-messages")
+        expect(described_class.api_type_for_model("openrouter", "anthropic/claude-sonnet-4-6",
+                                                  user_override: ""))
+          .to eq("anthropic-messages")
+      end
+
+      it "still returns the override for unknown providers" do
+        expect(described_class.api_type_for_model("no-such-provider", "anything",
+                                                  user_override: "anthropic-messages"))
+          .to eq("anthropic-messages")
+      end
+    end
+
+    it "routes OrcaRouter anthropic/* models to anthropic-messages" do
+      # OrcaRouter also exposes a native Anthropic /v1/messages endpoint, so
+      # Claude models route there to preserve cache_control fidelity (same
+      # rationale as OpenRouter above).
+      expect(described_class.api_type_for_model("orcarouter", "anthropic/claude-sonnet-5"))
+        .to eq("anthropic-messages")
+      expect(described_class.api_type_for_model("orcarouter", "anthropic/claude-opus-4.8"))
+        .to eq("anthropic-messages")
+    end
+
+    it "keeps non-Claude OrcaRouter models on the OpenAI shim" do
+      expect(described_class.api_type_for_model("orcarouter", "google/gemini-3.5-flash"))
+        .to eq("openai-completions")
+      expect(described_class.api_type_for_model("orcarouter", "openai/gpt-5.5"))
+        .to eq("openai-completions")
+      expect(described_class.api_type_for_model("orcarouter", "deepseek/deepseek-v4-flash"))
+        .to eq("openai-completions")
+    end
+
+    it "routes Requesty Claude models to anthropic-messages" do
+      # Requesty also serves the native Anthropic /v1/messages endpoint, for
+      # both managed policy ids and vendor-prefixed catalogue ids.
+      expect(described_class.api_type_for_model("requesty", "claude-sonnet-4-6"))
+        .to eq("anthropic-messages")
+      expect(described_class.api_type_for_model("requesty", "anthropic/claude-sonnet-4-6"))
+        .to eq("anthropic-messages")
+    end
+
+    it "keeps non-Claude Requesty models on the OpenAI shim" do
+      expect(described_class.api_type_for_model("requesty", "gpt-5.5"))
+        .to eq("openai-completions")
+      expect(described_class.api_type_for_model("requesty", "openai/gpt-4o-mini"))
+        .to eq("openai-completions")
+      expect(described_class.api_type_for_model("requesty", "gemini-3.8-flash"))
+        .to eq("openai-completions")
+    end
+  end
+
+  describe ".default_ocr_model" do
+    it "picks the declared OpenRouter OCR model" do
+      # default_ocr_model only honours a declared model that is also in the
+      # picker, so this guards the membership of the Gemini entry.
+      expect(described_class.default_ocr_model("openrouter")).to eq("google/gemini-3.8-flash")
+      expect(described_class.ocr_models("openrouter")).to include("google/gemini-3.8-flash")
+    end
+  end
+
+  describe ".anthropic_format_for_model?" do
+    it "is true for OpenRouter Claude models" do
+      expect(described_class.anthropic_format_for_model?("openrouter", "anthropic/claude-opus-4-7"))
+        .to be true
+    end
+
+    it "is false for OpenRouter non-Claude models" do
+      expect(described_class.anthropic_format_for_model?("openrouter", "google/gemini-3-pro"))
+        .to be false
+    end
+
+    it "is false for providers without an anthropic-messages override" do
+      expect(described_class.anthropic_format_for_model?("openai", "gpt-5.5")).to be false
+    end
+
+    it "is false for unknown providers" do
+      expect(described_class.anthropic_format_for_model?("ghost-provider", "any-model")).to be false
+    end
+
+    it "is true for OrcaRouter Claude models" do
+      expect(described_class.anthropic_format_for_model?("orcarouter", "anthropic/claude-sonnet-5"))
+        .to be true
+    end
+
+    it "is false for OrcaRouter non-Claude models" do
+      expect(described_class.anthropic_format_for_model?("orcarouter", "openai/gpt-5.5"))
+        .to be false
+    end
+
+    it "is true for Requesty Claude models" do
+      expect(described_class.anthropic_format_for_model?("requesty", "claude-haiku-4-5"))
+        .to be true
+    end
+
+    it "is false for Requesty non-Claude models" do
+      expect(described_class.anthropic_format_for_model?("requesty", "gpt-5.5"))
+        .to be false
+    end
+  end
+
+  describe ".max_output_for" do
+    it "returns 65_536 for GLM models" do
+      expect(described_class.max_output_for("glm-5.2")).to eq(65_536)
+      expect(described_class.max_output_for("glm-5.1")).to eq(65_536)
+    end
+
+    it "returns 65_536 for Kimi K3 models" do
+      expect(described_class.max_output_for("kimi-k3")).to eq(65_536)
+    end
+
+    it "returns nil for Kimi K2-series (falls back to global default)" do
+      expect(described_class.max_output_for("kimi-k2.6")).to be_nil
+    end
+
+    it "returns 65_536 for MiMo-V2.5-Pro" do
+      expect(described_class.max_output_for("mimo-v2.5-pro")).to eq(65_536)
+    end
+
+    it "returns 65_536 for Gemini models" do
+      expect(described_class.max_output_for("or-gemini-3-6-flash")).to eq(65_536)
+      expect(described_class.max_output_for("or-gemini-3-5-flash")).to eq(65_536)
+      expect(described_class.max_output_for("or-gemini-3-1-pro")).to eq(65_536)
+    end
+
+    it "returns 32_768 for MiMo-V2.5 (non-pro)" do
+      expect(described_class.max_output_for("mimo-v2.5")).to eq(32_768)
+    end
+
+    it "returns nil for models without a declared limit" do
+      expect(described_class.max_output_for("gpt-5.5")).to be_nil
+      expect(described_class.max_output_for("claude-opus-4-7")).to be_nil
+    end
+
+    it "returns nil for nil or empty model name" do
+      expect(described_class.max_output_for(nil)).to be_nil
+      expect(described_class.max_output_for("")).to be_nil
+    end
+  end
+end

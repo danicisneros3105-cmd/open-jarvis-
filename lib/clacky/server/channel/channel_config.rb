@@ -1,0 +1,225 @@
+# frozen_string_literal: true
+
+require "yaml"
+require "fileutils"
+require "json"
+
+module Clacky
+  # ChannelConfig manages IM platform credentials (Feishu, WeCom, etc.).
+  #
+  # Config is stored in ~/.clacky/channels.yml:
+  #
+  #   channels:
+  #     feishu:
+  #       enabled: true
+  #       app_id: cli_xxx
+  #       app_secret: xxx
+  #       domain: https://open.feishu.cn
+  #       allowed_users:
+  #         - ou_xxx
+  #     wecom:
+  #       enabled: false
+  #       bot_id: xxx
+  #       secret: xxx
+  #
+  # This class is only responsible for platform credentials.
+  # working_dir and permission_mode live in AgentConfig.
+  class ChannelConfig
+    CONFIG_DIR  = File.join(Dir.home, ".clacky")
+    CONFIG_FILE = File.join(CONFIG_DIR, "channels.yml")
+
+    # @param channels [Hash<String, Hash>] string-keyed platform configs (raw from YAML)
+    # @param status_messages [Boolean] global toggle for process-status messages
+    #   ("Thinking...", "Done" summary) sent to IM chats
+    # @param process_messages [Boolean] global toggle for tool-process messages
+    #   (interim narration, file/shell previews) sent to IM chats
+    # @param progress_cards [Boolean] global toggle for live-updating progress
+    #   cards on platforms that support them
+    def initialize(channels: {}, status_messages: false, process_messages: false, progress_cards: true)
+      @channels         = channels || {}
+      @status_messages  = status_messages == true ? true : false
+      @process_messages = process_messages == true ? true : false
+      # Opt-out (unlike the toggles above): missing key keeps cards on for existing users.
+      @progress_cards   = progress_cards == false ? false : true
+    end
+
+    # Load from disk. Returns an empty instance if the file does not exist.
+    # @param config_file [String]
+    # @return [ChannelConfig]
+    def self.load(config_file = CONFIG_FILE)
+      if File.exist?(config_file)
+        data = YAMLCompat.safe_load(File.read(config_file), permitted_classes: [Symbol]) || {}
+      else
+        data = {}
+      end
+
+      new(channels: data["channels"] || {}, status_messages: data["status_messages"], process_messages: data["process_messages"], progress_cards: data["progress_cards"])
+    end
+
+    # Persist to disk.
+    # @param config_file [String]
+    def save(config_file = CONFIG_FILE)
+      FileUtils.mkdir_p(File.dirname(config_file))
+      File.write(config_file, to_yaml)
+      FileUtils.chmod(0o600, config_file)
+    end
+
+    # Serialize to YAML string.
+    # @return [String]
+    def to_yaml
+      YAML.dump({ "status_messages" => @status_messages, "process_messages" => @process_messages, "progress_cards" => @progress_cards, "channels" => @channels })
+    end
+
+    # Returns true if at least one channel is enabled.
+    def any_enabled?
+      @channels.any? { |_, cfg| cfg["enabled"] }
+    end
+
+    # Returns the list of enabled platform symbols.
+    # @return [Array<Symbol>]
+    def enabled_platforms
+      @channels
+        .select { |_, cfg| cfg["enabled"] }
+        .keys
+        .map(&:to_sym)
+    end
+
+    # Returns true if the given platform is configured and enabled.
+    # @param platform [Symbol, String]
+    def enabled?(platform)
+      cfg = @channels[platform.to_s]
+      cfg && cfg["enabled"]
+    end
+
+    # Return the symbol-keyed config hash expected by each adapter's initializer.
+    # Returns nil if the platform is not configured.
+    #
+    # @param platform [Symbol, String]
+    # @return [Hash, nil]
+    def platform_config(platform)
+      raw = @channels[platform.to_s]
+      return nil unless raw
+
+      case platform.to_sym
+      when :feishu
+        {
+          app_id:        raw["app_id"],
+          app_secret:    raw["app_secret"],
+          domain:        raw["domain"],
+          allowed_users: raw["allowed_users"]
+        }.compact
+      when :wecom
+        {
+          bot_id: raw["bot_id"],
+          secret: raw["secret"]
+        }.compact
+      when :weixin
+        {
+          token:         raw["token"],
+          base_url:      raw["base_url"],
+          allowed_users: raw["allowed_users"]
+        }.compact
+      when :discord
+        {
+          bot_token:     raw["bot_token"]
+        }.compact
+      when :dingtalk
+        {
+          client_id:     raw["client_id"],
+          client_secret: raw["client_secret"],
+          allowed_users: raw["allowed_users"]
+        }.compact
+      when :telegram
+        {
+          bot_token:     raw["bot_token"],
+          base_url:      raw["base_url"],
+          parse_mode:    raw.key?("parse_mode") ? raw["parse_mode"] : "Markdown",
+          allowed_users: raw["allowed_users"]
+        }.compact
+      else
+        # Unknown platform — pass all non-meta keys as symbol-keyed hash
+        raw.reject { |k, _| k == "enabled" }
+           .transform_keys(&:to_sym)
+      end
+    end
+
+    # Set or update a platform's credentials.
+    # Merges provided fields into the existing entry.
+    # Automatically sets enabled: true unless explicitly provided.
+    #
+    # @param platform [Symbol, String]
+    # @param fields [Hash] symbol-keyed credential fields
+    def set_platform(platform, **fields)
+      key = platform.to_s
+      @channels[key] ||= {}
+      fields.each { |k, v| @channels[key][k.to_s] = v }
+      @channels[key]["enabled"] = true unless @channels[key].key?("enabled")
+    end
+
+    # Global toggle: whether process-status messages ("Thinking...", "Done"
+    # summary) are sent to IM chats. Defaults to false.
+    def status_messages_enabled?
+      @status_messages == true
+    end
+
+    # Enable/disable process-status messages globally.
+    # @param enabled [Boolean]
+    def set_status_messages(enabled)
+      @status_messages = enabled ? true : false
+    end
+
+    # Global toggle: whether tool-process messages (interim narration,
+    # file/shell previews) are sent to IM chats. Defaults to false.
+    def process_messages_enabled?
+      @process_messages == true
+    end
+
+    # Enable/disable tool-process messages globally.
+    # @param enabled [Boolean]
+    def set_process_messages(enabled)
+      @process_messages = enabled ? true : false
+    end
+
+    # Global toggle: whether task progress is shown in one live-updating card
+    # on platforms that support it. When off, status and process updates are
+    # sent as separate messages instead. Defaults to true.
+    def progress_cards_enabled?
+      @progress_cards == true
+    end
+
+    # Enable/disable progress cards globally.
+    # @param enabled [Boolean]
+    def set_progress_cards(enabled)
+      @progress_cards = enabled ? true : false
+    end
+
+    # Enable a platform (requires it to already be configured).
+    # @param platform [Symbol, String]
+    # @raise [ArgumentError] if the platform has no stored credentials yet.
+    def enable_platform(platform)
+      key = platform.to_s
+      raise ArgumentError, "Platform #{platform} is not configured" unless @channels.key?(key)
+      @channels[key]["enabled"] = true
+    end
+
+    # Disable a platform (keeps credentials, just sets enabled: false).
+    # @param platform [Symbol, String]
+    def disable_platform(platform)
+      key = platform.to_s
+      return unless @channels.key?(key)
+      @channels[key]["enabled"] = false
+    end
+
+    # Remove a platform entry entirely.
+    # @param platform [Symbol, String]
+    def remove_platform(platform)
+      @channels.delete(platform.to_s)
+    end
+
+    # Deep copy - prevents callers from mutating shared config state.
+    # @return [ChannelConfig]
+    def deep_copy
+      self.class.new(channels: JSON.parse(JSON.generate(@channels)), status_messages: @status_messages, process_messages: @process_messages, progress_cards: @progress_cards)
+    end
+  end
+end

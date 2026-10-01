@@ -1,0 +1,232 @@
+# frozen_string_literal: true
+
+# ── Global encoding defaults ──────────────────────────────────────────────────
+# Force UTF-8 as the default external/internal encoding for all IO operations
+# (File.read, Open3.capture3, HTTP bodies, etc.) so that binary-encoded strings
+# from external processes or network I/O never cause "invalid byte sequence in
+# UTF-8" errors on Ruby 2.6+.
+# Binary-specific operations (File.binread, IO#read with "b" mode, .b) are
+# unaffected — they always bypass this setting.
+Encoding.default_external = Encoding::UTF_8
+Encoding.default_internal = Encoding::UTF_8
+
+# ── Ruby < 2.7 polyfills ──────────────────────────────────────────────────────
+
+# Enumerable#filter_map was added in Ruby 2.7.
+if RUBY_VERSION < "2.7"
+  module Enumerable
+    def filter_map(&block)
+      return to_enum(:filter_map) unless block
+
+      each_with_object([]) do |item, result|
+        mapped = block.call(item)
+        result << mapped if mapped
+      end
+    end
+  end
+end
+
+# File.absolute_path? was added in Ruby 2.7.
+# Polyfill: a path is absolute if it starts with "/" (Unix) or a drive letter (Windows).
+unless File.respond_to?(:absolute_path?)
+  def File.absolute_path?(path)
+    File.expand_path(path) == path.to_s
+  end
+end
+
+# URI.encode_uri_component was added in Ruby 3.2.
+# CGI.escape encodes spaces as '+'; replace with '%20' to match URI encoding.
+require "uri"
+require "cgi"
+unless URI.respond_to?(:encode_uri_component)
+  def URI.encode_uri_component(str)
+    CGI.escape(str.to_s).gsub("+", "%20")
+  end
+end
+
+# YAML.safe_load with permitted_classes: keyword was added in Psych 4 (Ruby 3.1).
+# On older Ruby, the second positional argument serves the same purpose.
+# This helper provides a unified interface across Ruby versions.
+module YAMLCompat
+  def self.safe_load(yaml_string, permitted_classes: [])
+    if Psych::VERSION >= "4.0"
+      YAML.safe_load(yaml_string, permitted_classes: permitted_classes)
+    else
+      YAML.safe_load(yaml_string, permitted_classes)
+    end
+  end
+
+  def self.load_file(path, permitted_classes: [])
+    safe_load(File.read(path), permitted_classes: permitted_classes)
+  end
+end
+
+require_relative "clacky/version"
+require_relative "clacky/message_format/anthropic"
+require_relative "clacky/message_format/open_ai"
+require_relative "clacky/message_format/open_ai_responses"
+require_relative "clacky/message_format/bedrock"
+require_relative "clacky/bedrock_stream_aggregator"
+require_relative "clacky/openai_stream_aggregator"
+require_relative "clacky/openai_responses_stream_aggregator"
+require_relative "clacky/anthropic_stream_aggregator"
+require_relative "clacky/locales/i18n"
+require_relative "clacky/client"
+require_relative "clacky/skill"
+require_relative "clacky/skill_loader"
+
+# Agent system
+require_relative "clacky/message_history"
+require_relative "clacky/agent_config"
+require_relative "clacky/agent_profile"
+require_relative "clacky/providers"
+require_relative "clacky/session_manager"
+require_relative "clacky/idle_compression_timer"
+
+# Agent modules
+require_relative "clacky/agent/message_compressor"
+require_relative "clacky/agent/hook_manager"
+require_relative "clacky/shell_hook_loader"
+require_relative "clacky/agent/tool_registry"
+require_relative "clacky/cancel_flag"
+require_relative "clacky/fanout"
+
+# UI modules
+require_relative "clacky/ui2/thinking_verbs"
+require_relative "clacky/ui2/progress_indicator"
+
+# Utils
+require_relative "clacky/utils/logger"
+require_relative "clacky/shutdown"
+require_relative "clacky/thread_registry"
+require_relative "clacky/proxy_config"
+require_relative "clacky/platform_http_client"
+require_relative "clacky/identity"
+require_relative "clacky/access_key"
+require_relative "clacky/utils/encoding"
+require_relative "clacky/utils/environment_detector"
+require_relative "clacky/utils/mac_app_detector"
+require_relative "clacky/utils/windows_app_detector"
+require_relative "clacky/utils/browser_detector"
+require_relative "clacky/utils/scripts_manager"
+require_relative "clacky/utils/searcher_manager"
+require_relative "clacky/search_config"
+require_relative "clacky/utils/model_pricing"
+require_relative "clacky/utils/gitignore_parser"
+require_relative "clacky/utils/limit_stack"
+require_relative "clacky/utils/path_helper"
+require_relative "clacky/utils/file_ignore_helper"
+require_relative "clacky/utils/string_matcher"
+require_relative "clacky/utils/channel_prompt"
+require_relative "clacky/utils/login_shell"
+require_relative "clacky/tools/base"
+require_relative "clacky/utils/file_processor"
+
+require_relative "clacky/tools/security"
+require_relative "clacky/tools/file_reader"
+require_relative "clacky/tools/write"
+require_relative "clacky/tools/edit"
+require_relative "clacky/tools/glob"
+require_relative "clacky/tools/grep"
+require_relative "clacky/tools/web_search"
+require_relative "clacky/tools/web_fetch"
+require_relative "clacky/tools/todo_manager"
+require_relative "clacky/tools/trash_manager"
+require_relative "clacky/tools/ask_user"
+require_relative "clacky/tools/invoke_skill"
+require_relative "clacky/tools/browser"
+require_relative "clacky/tools/terminal"
+require_relative "clacky/mcp/client"
+require_relative "clacky/mcp/virtual_skill"
+require_relative "clacky/mcp/registry"
+require_relative "clacky/mcp/skill_provider"
+require_relative "clacky/media/base"
+require_relative "clacky/media/openai_compat"
+require_relative "clacky/media/generator"
+require_relative "clacky/vision/resolver"
+require_relative "clacky/telemetry"
+require_relative "clacky/agent"
+
+require_relative "clacky/server/session_registry"
+require_relative "clacky/server/web_ui_controller"
+require_relative "clacky/server/browser_manager"
+require_relative "clacky/server/backup_manager"
+require_relative "clacky/cli"
+
+# Extension architecture: define the base class + container loader + scaffolding
+# + dispatcher up front so the patch / hook loaders below can read its result.
+require_relative "clacky/extension/api_extension"
+require_relative "clacky/extension/api_loader"
+require_relative "clacky/extension/loader"
+require_relative "clacky/extension/scaffold/template_renderer"
+require_relative "clacky/extension/scaffold"
+require_relative "clacky/extension/packager"
+require_relative "clacky/extension/dispatcher"
+require_relative "clacky/extension/hook_loader"
+require_relative "clacky/extension/verifier"
+Clacky::ExtensionLoader.load_all
+
+# Runtime patch layer: load user/AI patches from ~/.clacky/patches/ AND patches
+# contributed by ext.yml containers (contributes.patches). Runs after all gem
+# code is defined, so fingerprints reflect the actual installed source.
+require_relative "clacky/extension/patch_loader"
+Clacky::PatchLoader.load_all
+
+# Process-wide registry of hook callbacks contributed by ext.yml containers
+# (contributes.hooks). Each agent copies them onto its own HookManager at init.
+Clacky::ExtensionHookLoader.load_all
+
+module Clacky
+  class AgentInterrupted < Exception; end  # Inherit from Exception to bypass rescue StandardError
+  class AgentError < StandardError
+    attr_reader :raw_message
+
+    def initialize(message, raw_message: nil)
+      super(message)
+      @raw_message = raw_message
+    end
+  end
+  class BadRequestError < AgentError
+    attr_reader :display_message
+
+    def initialize(message, display_message: nil, raw_message: nil)
+      super(message, raw_message: raw_message)
+      @display_message = display_message
+    end
+  end
+  class InsufficientCreditError < AgentError
+    attr_reader :error_code, :provider_id
+
+    def initialize(message, error_code: nil, provider_id: nil, raw_message: nil)
+      super(message, raw_message: raw_message)
+      @error_code = error_code
+      @provider_id = provider_id
+    end
+  end
+  # Free-trial key used a model outside its allow-list; carries the same top-up context.
+  class ModelNotAllowedError < InsufficientCreditError; end
+  # Transient errors that should be retried (5xx, HTML response, rate limit).
+  # routed_tier: which auto-routing tier ("floor"/"upgrade") the failed call
+  # was routed to, echoed from the gateway's X-Clacky-Routed-Tier header. nil
+  # when the failure happened before the gateway answered (network layer) or
+  # outside the auto alias — such failures are not attributed to any tier.
+  class RetryableError < StandardError
+    attr_reader :routed_tier
+
+    def initialize(message = nil, routed_tier: nil)
+      super(message)
+      @routed_tier = routed_tier
+    end
+  end
+  # Upstream (model/router like OpenRouter/Bedrock) returned finish_reason="stop" together with
+  # one or more tool_calls whose `arguments` JSON was truncated (empty, "{}" placeholder, or
+  # otherwise unparseable). Subclass of RetryableError so it flows through the existing
+  # retry/fallback pipeline in LlmCaller#call_llm.
+  class UpstreamTruncatedError < RetryableError; end
+  class ToolCallError < AgentError; end  # Raised when tool call fails due to invalid parameters
+  class BrowserNotReachableError < AgentError; end  # Chrome/Edge not running or remote debugging disabled
+  class FanoutTimeoutError < AgentError; end  # A fan-out job exceeded the batch wall-clock budget
+  # BrowserManager singleton: Clacky::BrowserManager.instance
+end
+
+Clacky::ProxyConfig.install!

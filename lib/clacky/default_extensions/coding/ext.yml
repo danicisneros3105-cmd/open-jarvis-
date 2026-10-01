@@ -1,0 +1,18 @@
+id: coding
+name: Coding
+description: AI coding assistant agent
+version: "0.1.0"
+author: OpenClacky
+homepage: https://www.openclacky.com
+license: MIT
+contributes:
+  agents:
+    - id: coding
+      title: Coding
+      title_zh: 编程开发
+      description: Claude Code-grade coding capability, your technical co-founder
+      description_zh: 对齐 Claude Code 的编程能力，你的技术合伙人
+      order: 2
+      prompt: agents/coding/system_prompt.md
+      avatar: agents/coding/avatar.png
+      panels: [git/git, time_machine/time_machine]

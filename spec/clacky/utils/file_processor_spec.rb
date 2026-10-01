@@ -1,0 +1,649 @@
+# frozen_string_literal: true
+
+require "tmpdir"
+require "cgi"
+
+RSpec.describe Clacky::Utils::FileProcessor do
+  # ---------------------------------------------------------------------------
+  # .save — store only, no parsing
+  # ---------------------------------------------------------------------------
+  describe ".save" do
+    it "writes bytes to disk and returns name + path" do
+      result = described_class.save(body: "hello", filename: "notes.txt")
+      expect(result[:name]).to eq("notes.txt")
+      expect(File.exist?(result[:path])).to be true
+      expect(File.read(result[:path])).to eq("hello")
+    end
+
+    it "sanitizes filesystem-unsafe characters but keeps Unicode" do
+      result = described_class.save(body: "", filename: "../../../etc/passwd")
+      expect(result[:name]).not_to include("/")
+      expect(File.exist?(result[:path])).to be true
+    end
+
+    it "preserves Chinese characters in filename" do
+      result = described_class.save(body: "x", filename: "OpenClacky企业智能体平台.pptx")
+      expect(result[:name]).to eq("OpenClacky企业智能体平台.pptx")
+    end
+
+    it "replaces colon and question mark but keeps the rest" do
+      result = described_class.save(body: "x", filename: "report: Q1?.pdf")
+      expect(result[:name]).to eq("report_ Q1_.pdf")
+    end
+
+    it "two saves with same filename produce different paths" do
+      r1 = described_class.save(body: "a", filename: "doc.pdf")
+      r2 = described_class.save(body: "b", filename: "doc.pdf")
+      expect(r1[:path]).not_to eq(r2[:path])
+    end
+
+    it "does NOT parse the file" do
+      expect(Clacky::Utils::ParserManager).not_to receive(:parse)
+      described_class.save(body: "%PDF-1.4", filename: "test.pdf")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # .process_path — parse an already-saved file
+  # ---------------------------------------------------------------------------
+  describe ".process_path" do
+    it "classifies supported video attachments without invoking a document parser" do
+      Dir.mktmpdir do |dir|
+        %w[clip.mp4 clip.webm clip.mov].each do |name|
+          path = File.join(dir, name)
+          File.binwrite(path, "video")
+          expect(Clacky::Utils::ParserManager).not_to receive(:parse).with(path)
+
+          ref = described_class.process_path(path)
+          expect(ref.type).to eq(:video)
+          expect(ref.original_path).to eq(path)
+          expect(ref.preview_path).to be_nil
+        end
+      end
+    end
+
+    context "when parser succeeds" do
+      it "returns FileRef with preview_path written to disk" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "test.pdf")
+          File.binwrite(path, "%PDF-1.4")
+
+          allow(Clacky::Utils::ParserManager).to receive(:parse).with(path)
+            .and_return({ success: true, text: "extracted text", error: nil, parser_path: nil })
+
+          ref = described_class.process_path(path)
+          # preview is now written to UPLOAD_DIR (tmpdir), not next to the original file
+          expect(ref.preview_path).to start_with(Clacky::Utils::FileProcessor::UPLOAD_DIR)
+          expect(ref.preview_path).to end_with(".preview.md")
+          expect(ref.preview_path).to include("test.pdf")
+          expect(File.read(ref.preview_path)).to eq("extracted text")
+          expect(ref.parse_error).to be_nil
+        end
+      end
+
+      it "uses filename as display name" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "report.docx")
+          File.binwrite(path, "bytes")
+
+          allow(Clacky::Utils::ParserManager).to receive(:parse)
+            .and_return({ success: true, text: "content", error: nil, parser_path: nil })
+
+          ref = described_class.process_path(path)
+          expect(ref.name).to eq("report.docx")
+        end
+      end
+
+      it "accepts explicit name override" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "abc123_report.docx")
+          File.binwrite(path, "bytes")
+
+          allow(Clacky::Utils::ParserManager).to receive(:parse)
+            .and_return({ success: true, text: "content", error: nil, parser_path: nil })
+
+          ref = described_class.process_path(path, name: "report.docx")
+          expect(ref.name).to eq("report.docx")
+        end
+      end
+    end
+
+    context "when parser fails" do
+      it "returns FileRef with parse_error and parser_path, no preview" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "broken.pdf")
+          File.binwrite(path, "not a real pdf")
+
+          allow(Clacky::Utils::ParserManager).to receive(:parse).with(path)
+            .and_return({ success: false, text: nil,
+                          error: "pdftotext failed", parser_path: "/home/.clacky/parsers/pdf_parser.rb" })
+
+          ref = described_class.process_path(path)
+          expect(ref.preview_path).to be_nil
+          expect(ref.parse_error).to eq("pdftotext failed")
+          expect(ref.parser_path).to eq("/home/.clacky/parsers/pdf_parser.rb")
+          expect(ref.parse_failed?).to be true
+        end
+      end
+    end
+
+    context "with image files" do
+      it "skips parsing and returns FileRef with no preview" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "photo.png")
+          File.binwrite(path, "\x89PNG\r\n\x1a\n")
+
+          expect(Clacky::Utils::ParserManager).not_to receive(:parse)
+
+          ref = described_class.process_path(path)
+          expect(ref.type).to eq(:image)
+          expect(ref.preview_path).to be_nil
+          expect(ref.parse_error).to be_nil
+        end
+      end
+    end
+
+    context "with zip files" do
+      it "generates directory listing preview without calling ParserManager" do
+        require "zip"
+        Dir.mktmpdir do |dir|
+          zip_path = File.join(dir, "archive.zip")
+          Zip::OutputStream.open(zip_path) do |z|
+            z.put_next_entry("readme.txt")
+            z.write("hello")
+          end
+
+          expect(Clacky::Utils::ParserManager).not_to receive(:parse)
+
+          ref = described_class.process_path(zip_path)
+          expect(ref.type).to eq(:zip)
+          expect(ref.preview_path).to end_with(".preview.md")
+          expect(File.read(ref.preview_path)).to include("readme.txt")
+        end
+      end
+
+      it "lists non-ASCII entry names as UTF-8 without raising" do
+        require "zip"
+        Dir.mktmpdir do |dir|
+          zip_path = File.join(dir, "chinese.zip")
+          Zip::OutputStream.open(zip_path) do |z|
+            z.put_next_entry("项目说明/README-中文.md")
+            z.write("hello")
+          end
+
+          ref = described_class.process_path(zip_path)
+          expect(ref.parse_error).to be_nil
+          preview = File.read(ref.preview_path)
+          expect(preview.encoding).to eq(Encoding::UTF_8)
+          expect(preview).to include("项目说明/README-中文.md")
+        end
+      end
+
+      it "survives entry names whose bytes are not valid UTF-8" do
+        require "zip"
+        Dir.mktmpdir do |dir|
+          zip_path = File.join(dir, "latin1.zip")
+          Zip::OutputStream.open(zip_path) do |z|
+            # Windows zips often store cp437/GBK names without the UTF-8 flag.
+            z.put_next_entry("caf\xE9.txt".b)
+            z.write("hello")
+          end
+
+          ref = described_class.process_path(zip_path)
+          expect(ref.parse_error).to be_nil
+          expect(File.read(ref.preview_path)).to include("caf")
+        end
+      end
+    end
+
+    context "with markdown files" do
+      it "points preview_path at the original file (no tmpdir copy)" do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "notes.md")
+          File.write(path, "# Heading\nbody line")
+
+          expect(Clacky::Utils::ParserManager).not_to receive(:parse)
+
+          ref = described_class.process_path(path)
+          expect(ref.type).to eq(:text)
+          # preview_path is the original file itself — no redundant copy in UPLOAD_DIR
+          expect(ref.preview_path).to eq(path)
+          expect(File.read(ref.preview_path)).to include("# Heading")
+          expect(ref.parse_error).to be_nil
+        end
+      end
+
+      it "also handles .markdown, .txt, .log extensions" do
+        Dir.mktmpdir do |dir|
+          %w[doc.markdown plain.txt server.log].each do |fname|
+            path = File.join(dir, fname)
+            File.write(path, "content of #{fname}")
+            ref = described_class.process_path(path)
+            expect(ref.type).to eq(:text)
+            expect(ref.preview_path).to eq(path)
+            expect(File.read(ref.preview_path)).to eq("content of #{fname}")
+          end
+        end
+      end
+    end
+
+    context "with tar.gz files" do
+      it "generates entry listing preview without calling ParserManager" do
+        require "rubygems/package"
+        require "zlib"
+        Dir.mktmpdir do |dir|
+          targz_path = File.join(dir, "archive.tar.gz")
+          File.open(targz_path, "wb") do |file|
+            Zlib::GzipWriter.wrap(file) do |gz|
+              Gem::Package::TarWriter.new(gz) do |tar|
+                tar.add_file_simple("hello.txt", 0o644, 5) { |io| io.write("hello") }
+                tar.add_file_simple("sub/bye.txt", 0o644, 3) { |io| io.write("bye") }
+              end
+            end
+          end
+
+          expect(Clacky::Utils::ParserManager).not_to receive(:parse)
+
+          ref = described_class.process_path(targz_path)
+          expect(ref.type).to eq(:zip)
+          expect(ref.preview_path).to end_with(".preview.md")
+          preview = File.read(ref.preview_path)
+          expect(preview).to include("TAR.GZ Contents")
+          expect(preview).to include("hello.txt")
+          expect(preview).to include("sub/bye.txt")
+          expect(ref.parse_error).to be_nil
+        end
+      end
+
+      it "handles .tgz extension" do
+        require "rubygems/package"
+        require "zlib"
+        Dir.mktmpdir do |dir|
+          tgz_path = File.join(dir, "bundle.tgz")
+          File.open(tgz_path, "wb") do |file|
+            Zlib::GzipWriter.wrap(file) do |gz|
+              Gem::Package::TarWriter.new(gz) do |tar|
+                tar.add_file_simple("a.txt", 0o644, 1) { |io| io.write("x") }
+              end
+            end
+          end
+
+          ref = described_class.process_path(tgz_path)
+          expect(ref.type).to eq(:zip)
+          expect(File.read(ref.preview_path)).to include("a.txt")
+        end
+      end
+    end
+
+    context "with tar files" do
+      it "generates entry listing preview" do
+        require "rubygems/package"
+        Dir.mktmpdir do |dir|
+          tar_path = File.join(dir, "archive.tar")
+          File.open(tar_path, "wb") do |file|
+            Gem::Package::TarWriter.new(file) do |tar|
+              tar.add_file_simple("one.txt", 0o644, 3) { |io| io.write("foo") }
+              tar.add_file_simple("two.txt", 0o644, 3) { |io| io.write("bar") }
+            end
+          end
+
+          ref = described_class.process_path(tar_path)
+          expect(ref.type).to eq(:zip)
+          preview = File.read(ref.preview_path)
+          expect(preview).to include("TAR Contents")
+          expect(preview).to include("one.txt")
+          expect(preview).to include("two.txt")
+        end
+      end
+    end
+
+    context "with single-file .gz" do
+      it "falls back to size metadata when archive is not a tarball" do
+        require "zlib"
+        Dir.mktmpdir do |dir|
+          gz_path = File.join(dir, "data.gz")
+          File.open(gz_path, "wb") do |file|
+            Zlib::GzipWriter.wrap(file) do |gz|
+              gz.write("hello world, not a tarball\n" * 4)
+            end
+          end
+
+          ref = described_class.process_path(gz_path)
+          expect(ref.type).to eq(:zip)
+          expect(ref.preview_path).not_to be_nil
+          preview = File.read(ref.preview_path)
+          # Either recognised as GZIP metadata, or — if extension sniffing
+          # still accepted it as tar — at least produces some listing.
+          expect(preview).to match(/GZIP Contents|TAR\.GZ Contents|could not list/)
+        end
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # .process — save + process_path combined
+  # ---------------------------------------------------------------------------
+  describe ".process" do
+    it "saves file to disk and returns parsed FileRef" do
+      allow(Clacky::Utils::ParserManager).to receive(:parse)
+        .and_return({ success: true, text: "the content", error: nil, parser_path: nil })
+
+      ref = described_class.process(body: "%PDF-1.4", filename: "doc.pdf")
+      expect(ref).to be_a(Clacky::Utils::FileProcessor::FileRef)
+      expect(ref.name).to eq("doc.pdf")
+      expect(File.exist?(ref.original_path)).to be true
+      expect(ref.preview_path).to end_with(".preview.md")
+    end
+
+    it "propagates parse_error when parser fails" do
+      allow(Clacky::Utils::ParserManager).to receive(:parse)
+        .and_return({ success: false, text: nil, error: "oops", parser_path: "/some/parser.rb" })
+
+      ref = described_class.process(body: "%PDF-1.4", filename: "bad.pdf")
+      expect(ref.parse_failed?).to be true
+      expect(ref.parse_error).to eq("oops")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # File type helpers
+  # ---------------------------------------------------------------------------
+  describe ".binary_file_path?" do
+    it "returns true for PNG by extension" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "test.png")
+        File.binwrite(f, "\x89PNG".b)
+        expect(described_class.binary_file_path?(f)).to be true
+      end
+    end
+
+    it "returns false for plain text files" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "test.txt")
+        File.write(f, "hello world")
+        expect(described_class.binary_file_path?(f)).to be false
+      end
+    end
+
+    it "returns true for files with null bytes" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "test.dat")
+        File.binwrite(f, "abc\x00def".b)
+        expect(described_class.binary_file_path?(f)).to be true
+      end
+    end
+  end
+
+  describe ".supported_binary_file?" do
+    it "returns true for images and PDF" do
+      %w[test.png test.jpg test.pdf].each do |name|
+        expect(described_class.supported_binary_file?(name)).to be true
+      end
+    end
+
+    it "returns false for zip and docx" do
+      %w[test.zip test.docx].each do |name|
+        expect(described_class.supported_binary_file?(name)).to be false
+      end
+    end
+  end
+
+  describe ".detect_mime_type" do
+    it "maps common extensions" do
+      expect(described_class.detect_mime_type("a.png")).to  eq("image/png")
+      expect(described_class.detect_mime_type("a.jpg")).to  eq("image/jpeg")
+      expect(described_class.detect_mime_type("a.pdf")).to  eq("application/pdf")
+      expect(described_class.detect_mime_type("a.bin")).to  eq("application/octet-stream")
+    end
+  end
+
+  describe ".image_path_to_data_url" do
+    it "converts PNG to data URL" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "test.png")
+        File.binwrite(f, "\x89PNG\r\n\x1a\n".b)
+        expect(described_class.image_path_to_data_url(f)).to start_with("data:image/png;base64,")
+      end
+    end
+
+    it "raises for missing file" do
+      expect { described_class.image_path_to_data_url("/no/such/file.png") }
+        .to raise_error(ArgumentError, /Image file not found/)
+    end
+
+    it "raises when file exceeds MAX_IMAGE_BYTES" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "big.png")
+        File.binwrite(f, "x" * (described_class::MAX_IMAGE_BYTES + 1))
+        expect { described_class.image_path_to_data_url(f) }
+          .to raise_error(ArgumentError, /Image too large/)
+      end
+    end
+  end
+
+  describe ".file_to_base64" do
+    it "returns format/mime/base64 for PDF" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "test.pdf")
+        File.binwrite(f, "%PDF-1.4")
+        result = described_class.file_to_base64(f)
+        expect(result[:format]).to eq("pdf")
+        expect(result[:mime_type]).to eq("application/pdf")
+        expect(result[:base64_data]).to be_a(String)
+      end
+    end
+
+    it "raises for oversized files" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "huge.pdf")
+        File.binwrite(f, "x" * (described_class::MAX_FILE_BYTES + 1))
+        expect { described_class.file_to_base64(f) }
+          .to raise_error(ArgumentError, /File too large/)
+      end
+    end
+
+    it "downscales images to IMAGE_MAX_WIDTH by default" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "wide.png")
+        require "chunky_png"
+        require "base64"
+        ChunkyPNG::Image.new(1200, 100).save(f)
+
+        result = described_class.file_to_base64(f)
+        image = ChunkyPNG::Image.from_blob(Base64.strict_decode64(result[:base64_data]))
+        expect(image.width).to eq(described_class::IMAGE_MAX_WIDTH)
+      end
+    end
+
+    it "honours a custom max_width" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "wide.png")
+        require "chunky_png"
+        require "base64"
+        ChunkyPNG::Image.new(1200, 100).save(f)
+
+        result = described_class.file_to_base64(f, max_width: 1000)
+        image = ChunkyPNG::Image.from_blob(Base64.strict_decode64(result[:base64_data]))
+        expect(image.width).to eq(1000)
+      end
+    end
+
+    it "sends full resolution when max_width is 0" do
+      Dir.mktmpdir do |dir|
+        f = File.join(dir, "wide.png")
+        require "chunky_png"
+        require "base64"
+        ChunkyPNG::Image.new(1200, 100).save(f)
+
+        result = described_class.file_to_base64(f, max_width: 0)
+        image = ChunkyPNG::Image.from_blob(Base64.strict_decode64(result[:base64_data]))
+        expect(image.width).to eq(1200)
+      end
+    end
+  end
+
+  describe ".rewrite_local_image_urls" do
+    it "rewrites file:// image paths to /api/local-image proxy URLs" do
+      Dir.mktmpdir do |dir|
+        img = File.join(dir, "photo.png")
+        File.binwrite(img, "PNG")
+
+        content = "Check this: ![pic](file://#{img})"
+        result = described_class.rewrite_local_image_urls(content)
+
+        expected_path = CGI.escape("file://#{img}")
+        expect(result).to include("![pic](/api/local-image?path=#{expected_path}&v=")
+        expect(result).to match(/&v=\d+\)/)
+      end
+    end
+
+    it "rewrites bare absolute image paths to /api/local-image proxy URLs" do
+      Dir.mktmpdir do |dir|
+        img = File.join(dir, "photo.jpg")
+        File.binwrite(img, "JPEG")
+
+        content = "See: ![img](#{img})"
+        result = described_class.rewrite_local_image_urls(content)
+
+        expected_path = CGI.escape(img)
+        expect(result).to include("![img](/api/local-image?path=#{expected_path}&v=")
+        expect(result).to match(/&v=\d+\)/)
+      end
+    end
+
+    it "changes the version param when the same-name file is overwritten" do
+      Dir.mktmpdir do |dir|
+        img = File.join(dir, "cover.png")
+        File.binwrite(img, "v1")
+        first = described_class.rewrite_local_image_urls("![c](#{img})")
+
+        File.binwrite(img, "version-two")
+        File.utime(Time.now + 2, Time.now + 2, img)
+        second = described_class.rewrite_local_image_urls("![c](#{img})")
+
+        v1 = first[/&v=(\d+)/, 1]
+        v2 = second[/&v=(\d+)/, 1]
+        expect(v2).not_to eq(v1)
+      end
+    end
+
+    it "leaves https:// image URLs untouched" do
+      content = "![logo](https://example.com/logo.png)"
+      result = described_class.rewrite_local_image_urls(content)
+      expect(result).to eq(content)
+    end
+
+    it "leaves non-image local paths untouched" do
+      Dir.mktmpdir do |dir|
+        doc = File.join(dir, "doc.docx")
+        File.binwrite(doc, "PK")
+
+        content = "![doc](file://#{doc})"
+        result = described_class.rewrite_local_image_urls(content)
+        expect(result).to eq(content)
+      end
+    end
+
+    it "rewrites a local PDF to the media proxy URL" do
+      Dir.mktmpdir do |dir|
+        pdf = File.join(dir, "doc.pdf")
+        File.binwrite(pdf, "%PDF")
+
+        content = "![doc](file://#{pdf})"
+        result = described_class.rewrite_local_image_urls(content)
+        expect(result).to start_with("![doc](/api/local-image?path=")
+      end
+    end
+
+    it "leaves non-existent file paths untouched" do
+      content = "![img](/nonexistent/image.png)"
+      result = described_class.rewrite_local_image_urls(content)
+      expect(result).to eq(content)
+    end
+
+    it "rewrites a file://~/ tilde path, expanding ~ to the real home" do
+      Dir.mktmpdir(nil, File.expand_path("~")) do |dir|
+        img = File.join(dir, "photo.png")
+        File.binwrite(img, "PNG")
+        rel = img.sub(%r{\A#{Regexp.escape(File.expand_path("~"))}/}, "")
+
+        content = "![pic](file://~/#{rel})"
+        result = described_class.rewrite_local_image_urls(content)
+
+        expected_path = CGI.escape("file://~/#{rel}")
+        expect(result).to include("![pic](/api/local-image?path=#{expected_path}&v=")
+        expect(result).to match(/&v=\d+\)/)
+      end
+    end
+
+    it "does not match ~user (other account) tilde paths" do
+      content = "![pic](file://~someuser/photo.png)"
+      result = described_class.rewrite_local_image_urls(content)
+      expect(result).to eq(content)
+    end
+
+    it "returns nil/empty content as-is" do
+      expect(described_class.rewrite_local_image_urls(nil)).to be_nil
+      expect(described_class.rewrite_local_image_urls("")).to eq("")
+    end
+
+    it "handles multiple images in the same content" do
+      Dir.mktmpdir do |dir|
+        img1 = File.join(dir, "a.png")
+        img2 = File.join(dir, "b.jpg")
+        File.binwrite(img1, "PNG")
+        File.binwrite(img2, "JPG")
+
+        content = "![a](file://#{img1}) and ![b](#{img2})"
+        result = described_class.rewrite_local_image_urls(content)
+
+        expect(result).to include("/api/local-image?path=#{CGI.escape("file://#{img1}")}")
+        expect(result).to include("/api/local-image?path=#{CGI.escape(img2)}")
+      end
+    end
+
+    it "handles percent-encoded file:// paths" do
+      Dir.mktmpdir do |dir|
+        img = File.join(dir, "my photo.png")
+        File.binwrite(img, "PNG")
+
+        encoded_path = "file://#{dir}/my%20photo.png"
+        content = "![pic](#{encoded_path})"
+        result = described_class.rewrite_local_image_urls(content)
+
+        expect(result).to include("/api/local-image?path=")
+        expect(result).not_to eq(content)
+      end
+    end
+
+    it "rewrites a Windows drive-letter path resolved to the real local file (WSL)" do
+      Dir.mktmpdir do |dir|
+        real = File.join(dir, "shot.png")
+        File.binwrite(real, "PNG")
+
+        # On WSL a file:///C:/… href resolves (via win_to_linux_path) to the
+        # /mnt/… path. Stub the resolver to point the drive-letter href at our
+        # real temp file so we assert the rewrite uses the resolved path for
+        # existence + mtime while keeping the original href in the proxy URL.
+        drive_href = "file:///C:/Users/foo/shot.png"
+        allow(Clacky::Utils::EnvironmentDetector)
+          .to receive(:resolve_local_path).with(drive_href).and_return(real)
+
+        content = "![pic](#{drive_href})"
+        result = described_class.rewrite_local_image_urls(content)
+
+        expect(result).to include("![pic](/api/local-image?path=#{CGI.escape(drive_href)}&v=")
+        expect(result).to match(/&v=\d+\)/)
+      end
+    end
+
+    it "leaves a Windows drive-letter path untouched when the resolved file is missing" do
+      drive_href = "file:///C:/Users/foo/missing.png"
+      allow(Clacky::Utils::EnvironmentDetector)
+        .to receive(:resolve_local_path).with(drive_href).and_return("/mnt/c/Users/foo/missing.png")
+
+      content = "![pic](#{drive_href})"
+      expect(described_class.rewrite_local_image_urls(content)).to eq(content)
+    end
+  end
+end
