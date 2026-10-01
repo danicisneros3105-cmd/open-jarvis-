@@ -1,0 +1,187 @@
+# frozen_string_literal: true
+
+require "json"
+require "monitor"
+require "net/http"
+require "uri"
+require "securerandom"
+
+require_relative "transport"
+
+module Clacky
+  module Mcp
+    # MCP streamable-http transport (spec 2025-03-26).
+    #
+    # One endpoint URL handles both client→server (POST) and server→client (SSE).
+    # We POST every JSON-RPC message; the server may respond with either:
+    #   - application/json   → single response, deliver immediately
+    #   - text/event-stream  → one or more "data:" SSE events, each a JSON-RPC msg
+    #
+    # Session tracking: the server returns Mcp-Session-Id on the initialize
+    # response; we echo it on every subsequent request.
+    class HttpTransport < Transport
+      DEFAULT_OPEN_TIMEOUT = 10
+      DEFAULT_READ_TIMEOUT = 120
+
+      def initialize(name:, url:, headers: {}, authorization: nil, requester: nil,
+                     open_timeout: DEFAULT_OPEN_TIMEOUT, read_timeout: DEFAULT_READ_TIMEOUT)
+        @name = name
+        @uri  = URI.parse(url)
+        raise TransportError, "MCP server '#{name}' url is not http(s): #{url}" unless %w[http https].include?(@uri.scheme)
+
+        @extra_headers = (headers || {}).transform_keys(&:to_s).transform_values(&:to_s)
+        @authorization = authorization
+        @requester = requester
+        @open_timeout  = open_timeout
+        @read_timeout  = read_timeout
+
+        @session_id = nil
+        @on_message = nil
+        @lock = Monitor.new
+        @alive = false
+        @last_error = nil
+      end
+
+      def start
+        @alive = true
+        self
+      end
+
+      def stop
+        @alive = false
+      end
+
+      def alive?
+        @alive
+      end
+
+      def send_message(payload)
+        raise TransportError, "transport stopped" unless @alive
+
+        body = JSON.generate(payload)
+        is_request = payload.is_a?(Hash) && payload.key?(:id) || (payload.is_a?(Hash) && payload.key?("id"))
+
+        Clacky::ThreadRegistry.spawn(name: "mcp-http-dispatch") do
+          begin
+            dispatch_post(body, is_request: is_request)
+          rescue StandardError => e
+            @last_error = e
+            @on_message&.call({
+              "id"    => payload[:id] || payload["id"],
+              "error" => { "code" => -32000, "message" => "HTTP transport error: #{e.message}" }
+            })
+          end
+        end
+      end
+
+      def on_message(&blk)
+        @on_message = blk
+      end
+
+      def stderr_tail(bytes: 4096)
+        @last_error ? "last error: #{@last_error.class}: #{@last_error.message}" : ""
+      end
+
+      private def dispatch_post(body, is_request:, retried: false)
+        req = Net::HTTP::Post.new(@uri.request_uri)
+        req["Content-Type"] = "application/json"
+        req["Accept"]       = "application/json, text/event-stream"
+        req["MCP-Protocol-Version"] = Client::PROTOCOL_VERSION if defined?(Client::PROTOCOL_VERSION)
+        @lock.synchronize { req["Mcp-Session-Id"] = @session_id if @session_id }
+        @extra_headers.each { |k, v| req[k] = v }
+        @authorization&.authorization_headers&.each { |k, v| req[k] = v }
+        req.body = body
+
+        perform_request(req) do |res|
+          if (sid = res["Mcp-Session-Id"])
+            @lock.synchronize { @session_id = sid }
+          end
+
+          status = res.code.to_i
+          if status == 202
+            return
+          end
+          if status == 401 && @authorization && !retried
+            res.read_body.to_s
+            @authorization.invalidate!
+            return dispatch_post(body, is_request: is_request, retried: true)
+          end
+          if status >= 400
+            text = res.read_body.to_s
+            message = "HTTP #{status} from MCP server '#{@name}'"
+            message += ": #{text[0, 500]}" unless status == 401
+            raise TransportError, message
+          end
+
+          ctype = (res["Content-Type"] || "").downcase
+          if ctype.include?("text/event-stream")
+            consume_sse(res)
+          else
+            text = res.read_body.to_s
+            return if text.strip.empty?
+            begin
+              msg = JSON.parse(text)
+            rescue JSON::ParserError => e
+              raise TransportError, "invalid JSON from MCP server '#{@name}': #{e.message}"
+            end
+            deliver(msg)
+          end
+        end
+      end
+
+      private def perform_request(request, &block)
+        return @requester.call(request, &block) if @requester
+
+        http = Net::HTTP.new(@uri.host, @uri.port)
+        http.use_ssl = (@uri.scheme == "https")
+        http.open_timeout = @open_timeout
+        http.read_timeout = @read_timeout
+        http.request(request, &block)
+      end
+
+      private def consume_sse(res)
+        buffer = String.new
+        held_cr = false
+        res.read_body do |chunk|
+          chunk = "\r#{chunk}" if held_cr
+          # A trailing CR may be the first half of a CRLF pair split across
+          # chunks; hold it back so the pair still normalizes to one "\n"
+          # instead of two, which would fabricate an event boundary.
+          held_cr = chunk.end_with?("\r")
+          chunk = chunk.chomp("\r") if held_cr
+          buffer << chunk.gsub("\r\n", "\n").gsub("\r", "\n")
+          drain_events(buffer)
+        end
+        return unless held_cr
+
+        # Stream ended while holding a CR: it was a lone CR terminator.
+        buffer << "\n"
+        drain_events(buffer)
+      end
+
+      private def drain_events(buffer)
+        while (idx = buffer.index("\n\n"))
+          event = buffer.slice!(0, idx + 2)
+          data_lines = event.each_line.map(&:chomp).select { |l| l.start_with?("data:") }
+          next if data_lines.empty?
+          payload = data_lines.map { |l| l.sub(/\Adata:\s?/, "") }.join("\n")
+          next if payload.empty?
+          begin
+            msg = JSON.parse(payload)
+          rescue JSON::ParserError
+            next
+          end
+          deliver(msg)
+        end
+      end
+
+      private def deliver(msg)
+        if msg.is_a?(Array)
+          msg.each { |m| @on_message&.call(m) }
+        else
+          @on_message&.call(msg)
+        end
+      end
+    end
+  end
+end

@@ -1,0 +1,30 @@
+id: ext-studio
+name: Extension Studio
+description: AI-driven workspace for building, debugging, and publishing OpenClacky extensions
+version: "0.1.0"
+author: OpenClacky
+homepage: https://www.openclacky.com
+license: MIT
+contributes:
+  api: api/handler.rb
+  panels:
+    - id: studio
+      title: Creator Center
+      title_zh: 创作者中心
+      description: Build, debug and publish extensions and skills
+      description_zh: 开发、调试、发布扩展与 skill
+      view: panels/studio/view.js
+      order: 210
+  agents:
+    - id: ext-developer
+      title: Ext Developer
+      title_zh: 扩展开发
+      description: AI expert that helps you build custom AI agent workflows
+      description_zh: 帮你开发自定义 AI Agent 工作流的专家
+      order: 5
+      prompt: agents/ext-developer/system_prompt.md
+      avatar: agents/ext-developer/avatar.png
+      panels: [studio]
+      skills: [ext-develop]
+  skills:
+    - id: ext-develop

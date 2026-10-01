@@ -1,0 +1,1582 @@
+# frozen_string_literal: true
+
+require "thor"
+require "fileutils"
+require_relative "ui2"
+require_relative "json_ui_controller"
+require_relative "plain_ui_controller"
+require_relative "brand_config"
+require_relative "extension/cli_commands"
+require_relative "mcp/cli_commands"
+
+module Clacky
+  class CLI < Thor
+    def self.exit_on_failure?
+      true
+    end
+
+    # Set agent as the default command
+    default_task :agent
+
+    desc "agent", "Run agent in interactive mode with autonomous tool use (default)"
+    long_desc <<-LONGDESC
+      Run an AI agent in interactive mode that can autonomously use tools to complete tasks.
+
+      The agent runs in a continuous loop, allowing multiple tasks in one session.
+      Each task is completed with its own React (Reason-Act-Observe) cycle.
+      After completing a task, the agent waits for your next instruction.
+
+      Permission modes:
+        auto_approve    - Automatically execute all tools, no human interaction (use with caution)
+        confirm_safes   - Auto-approve safe operations, confirm risky ones (default)
+        confirm_all     - Auto-approve all file/shell tools, but wait for human on interactive prompts
+
+      UI themes:
+        hacker          - Matrix/hacker-style with bracket symbols (default)
+        minimal         - Clean, simple symbols
+
+      Session management:
+        -c, --continue  - Continue the most recent session for this directory
+        -l, --list      - List recent sessions
+        -a, --attach N  - Attach to session by number (e.g., -a 2) or session ID prefix (e.g., -a b6682a87)
+
+      Examples:
+        $ clacky agent --mode=auto_approve --path /path/to/project
+        $ clacky agent --model gpt-5.3-codex -m "write a hello world script"
+    LONGDESC
+    option :mode, type: :string, default: "confirm_safes",
+           desc: "Permission mode: auto_approve, confirm_safes, confirm_all"
+    option :theme, type: :string, default: "hacker",
+           desc: "UI theme: hacker, minimal (default: hacker)"
+    option :verbose, type: :boolean, aliases: "-v", default: false, desc: "Show detailed output"
+    option :path, type: :string, desc: "Project directory path (defaults to current directory)"
+    option :continue, type: :boolean, aliases: "-c", desc: "Continue most recent session"
+    option :fork, type: :string, desc: "Fork a session by number or session ID prefix (creates a copy)"
+    option :list, type: :boolean, aliases: "-l", desc: "List recent sessions"
+    option :attach, type: :string, aliases: "-a", desc: "Attach to session by number or keyword"
+    option :json, type: :boolean, default: false, desc: "Output NDJSON to stdout (for scripting/piping)"
+    option :ui, type: :string, default: nil, desc: "Interactive UI implementation: ui2, rich (default: ui2)"
+    option :message, type: :string, aliases: "-m", desc: "Run non-interactively with this message and exit"
+    option :file,  type: :array, aliases: "-f", desc: "File path(s) to attach (use with -m; supports images and documents)"
+    option :image, type: :array, aliases: "-i", desc: "Image file path(s) to attach (alias for --file, kept for compatibility)"
+    option :agent, type: :string, default: "coding", desc: "Agent profile to use: coding, general, or any custom profile name (default: coding)"
+    option :model, type: :string, desc: "Override the model to use (by name, e.g. gpt-5.3-codex or deepseek-v4-pro). Uses default model if not specified"
+    option :help, type: :boolean, aliases: "-h", desc: "Show this help message"
+    def agent
+      # Handle help option
+      if options[:help]
+        invoke :help, ["agent"]
+        return
+      end
+
+      # ── Telemetry (anonymous, opt-out via CLACKY_TELEMETRY=0) ──────────
+      # Fire-and-forget background thread; never blocks startup.
+      Clacky::Telemetry.startup!
+
+      # ── Sibling server discovery ───────────────────────────────────────
+      # Bare-CLI mode does NOT boot an HTTP server, so skills that call
+      # back into /api/* (channels, browser, scheduler) normally can't work.
+      # If the user happens to have a Clacky server running on this machine
+      # (in another terminal or via `clacky server`), auto-wire CLACKY_SERVER_HOST
+      # / CLACKY_SERVER_PORT so those skills can reach it transparently.
+      discover_sibling_server!
+
+      agent_config = Clacky::AgentConfig.load
+
+      # Override model if --model option is specified
+      if options[:model]
+        unless agent_config.switch_model_by_name(options[:model])
+          # During early startup @ui may not be ready; use simple error output
+          $stderr.puts "Error: model '#{options[:model]}' not found. Available: #{agent_config.model_names.join(', ')}"
+          exit 1
+        end
+      end
+
+      # Handle session listing
+      if options[:list]
+        list_sessions
+        return
+      end
+
+      # Handle Ctrl+C gracefully - raise exception to be caught in the loop
+      Signal.trap("INT") do
+        Thread.main.raise(Clacky::AgentInterrupted, "Interrupted by user")
+      end
+
+      # Validate and get working directory
+      working_dir = validate_working_directory(options[:path], agent_config)
+
+      # Update agent config with CLI options
+      agent_config.permission_mode = options[:mode].to_sym if options[:mode]
+      agent_config.verbose = options[:verbose] if options[:verbose]
+
+      # Client factory: produces a fresh Client reflecting the *current*
+      # state of agent_config each time it's called. The CLI never holds a
+      # long-lived `client` variable — instead, anyone who needs a client
+      # (initial agent construction, /clear, etc.) calls the factory.
+      #
+      # This mirrors the server-side design (HTTPServer#client_factory) and
+      # avoids the class of bugs where a shared client is ivar_set'd field by
+      # field (easy to miss @model / @use_bedrock) and then reused for a
+      # later Agent.new, serving stale credentials.
+      client_factory = lambda do
+        entry = agent_config.current_model
+        Clacky::Client.new(
+          agent_config.api_key,
+          base_url: agent_config.base_url,
+          model: agent_config.model_name,
+          anthropic_format: agent_config.anthropic_format?,
+          api_format: agent_config.api_format,
+          provider_id: agent_config.provider_id_for(entry),
+          capabilities: entry && entry["capabilities"]
+        )
+      end
+
+      # Resolve agent profile name from --agent option
+      agent_profile = options[:agent] || "coding"
+
+      # Handle session loading/continuation
+      session_manager = Clacky::SessionManager.new
+      agent = nil
+      is_session_load = false
+
+      if options[:continue]
+        agent = load_latest_session(client_factory.call, agent_config, session_manager, working_dir, profile: agent_profile)
+        is_session_load = !agent.nil?
+      elsif options[:attach]
+        agent = load_session_by_number(client_factory.call, agent_config, session_manager, working_dir, options[:attach], profile: agent_profile)
+        is_session_load = !agent.nil?
+      elsif options[:fork]
+        agent = fork_session(client_factory.call, agent_config, session_manager, working_dir, options[:fork], profile: agent_profile)
+        is_session_load = !agent.nil?
+      end
+
+      # Create new agent if no session loaded
+      if agent.nil?
+        agent = Clacky::Agent.new(client_factory.call, agent_config, working_dir: working_dir, ui: nil, profile: agent_profile,
+                                  session_id: Clacky::SessionManager.generate_id, source: :manual)
+        agent.rename("CLI Session")
+      end
+
+      # Change to working directory
+      original_dir = Dir.pwd
+      should_chdir = File.realpath(working_dir) != File.realpath(original_dir)
+      Dir.chdir(working_dir) if should_chdir
+      begin
+        if options[:message]
+          file_paths = Array(options[:file]) + Array(options[:image])
+          run_non_interactive(agent, options[:message], file_paths, agent_config, session_manager)
+        elsif options[:json]
+          run_agent_with_json(agent, working_dir, agent_config, session_manager, client_factory, profile: agent_profile)
+        else
+          run_agent_with_ui2(agent, working_dir, agent_config, session_manager, client_factory, is_session_load: is_session_load)
+        end
+      ensure
+        Dir.chdir(original_dir)
+        Clacky::BrowserManager.instance.stop rescue nil
+      end
+    end
+
+    no_commands do
+      # Detect a sibling Clacky server running on this machine and expose its
+      # address to skills via ENV. Runs only in bare-CLI mode (where no server
+      # is booted by this process), and only when the user hasn't already set
+      # CLACKY_SERVER_HOST / CLACKY_SERVER_PORT explicitly.
+      #
+      # Why: skills like `channel-manager` and `browser-setup` call back into
+      # http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/*. In server
+      # mode those vars are injected by HTTPServer#start. In CLI mode they
+      # would be blank, so the skill templates expand to an unreachable URL.
+      #
+      # Discovery is best-effort and non-fatal: if nothing is found we stay
+      # silent and let the skill's own pre-flight check emit a friendly error.
+      private def discover_sibling_server!
+        return if ENV["CLACKY_SERVER_PORT"] && !ENV["CLACKY_SERVER_PORT"].strip.empty?
+
+        require_relative "server/discover"
+        info = Clacky::Server::Discover.find_local
+        return unless info
+
+        ENV["CLACKY_SERVER_HOST"] = info[:host]
+        ENV["CLACKY_SERVER_PORT"] = info[:port].to_s
+        Clacky::Logger.debug(
+          "[CLI] Discovered local server PID=#{info[:pid]} at " \
+          "#{info[:host]}:#{info[:port]} — CLACKY_SERVER_* exported."
+        )
+      rescue StandardError => e
+        # Discovery must never break `clacky agent`.
+        Clacky::Logger.debug("[CLI] discover_sibling_server! failed: #{e.class}: #{e.message}")
+      end
+
+      # Handle the `/config` slash command.
+      #
+      # show_config_modal is a pure UI component — it only mutates @models
+      # (for add/edit/delete) and returns the user's intent as a hash:
+      #   nil                                         — user closed, no-op
+      #   { action: :switch, model_id: <id> }         — switch to existing model
+      #   { action: :add,    model_id: <id> }         — user added a new model, switch to it
+      #   { action: :edit,   model_id: <id> }         — user edited current model in place
+      #   { action: :delete, model_id: <id or nil> }  — user deleted current model
+      #
+      # All side-effects (switching the agent, rebuilding its Client, marking
+      # the new global default, saving config.yml, updating the UI) live here
+      # so the path is unified with the server-side api_switch_session_model.
+      private def handle_config_command(ui_controller, agent_config, agent)
+        config = agent_config
+
+        # Test callback used by the model edit form. Uses a throwaway Client
+        # with the form's (not-yet-saved) values to validate creds.
+        test_callback = lambda do |test_config|
+          test_client = Clacky::Client.new(
+            test_config.api_key,
+            base_url: test_config.base_url,
+            model: test_config.model_name,
+            anthropic_format: test_config.anthropic_format?,
+            api_format: test_config.api_format
+          )
+          test_client.test_connection(model: test_config.model_name)
+        end
+
+        result = ui_controller.show_config_modal(config, test_callback: test_callback)
+        return if result.nil?
+
+        case result[:action]
+        when :switch, :add
+          # CLI is a single-session context: picking (or adding) a model
+          # implies "use this now AND next launch". So we:
+          #   1. switch the agent to it — this goes through the single entry
+          #      point Agent#switch_model_by_id, which rebuilds the Client
+          #      (recomputing @use_bedrock / @use_anthropic_format), the
+          #      message compressor, and injects a session-context message.
+          #   2. mark it as the global default (type: "default" marker)
+          #   3. persist config.yml
+          target_id = result[:model_id]
+          agent.switch_model_by_id(target_id)
+          config.set_default_model_by_id(target_id)
+          config.save
+        when :edit
+          # current model was mutated in place — its stable id is unchanged.
+          # Re-run switch_model_by_id with the same id to rebuild the Client,
+          # so updated api_key / base_url / model take effect AND @use_bedrock
+          # is re-detected (the user may have edited the model name from
+          # abs-* to a non-Bedrock one or vice versa).
+          agent.switch_model_by_id(result[:model_id])
+          config.save
+        when :delete
+          # If the deleted model was the current one, show_config_modal has
+          # already re-resolved current_model and passed its new id back to
+          # us. Rebuild the Client around the new current model.
+          # If nothing is current (e.g. last model deleted — guarded by the
+          # modal, shouldn't happen), there's nothing to rebuild.
+          if result[:model_id]
+            agent.switch_model_by_id(result[:model_id])
+          end
+          config.save
+        end
+
+        # Refresh UI bar and model list
+        ui_controller.config[:model] = config.model_name
+        ui_controller.available_models = config.model_names
+        ui_controller.update_sessionbar(
+          tasks: agent.total_tasks,
+          cost: agent.total_cost
+        )
+
+        # Show summary. Guard api_key slice against empty/short keys.
+        key = config.api_key.to_s
+        masked_key = if key.length >= 12
+          "#{key[0..7]}#{'*' * 20}#{key[-4..]}"
+        else
+          "(not set)"
+        end
+        ui_controller.show_success("Configuration updated!")
+        ui_controller.append_output("  Current Model: #{config.model_name}")
+        ui_controller.append_output("  API Key: #{masked_key}")
+        ui_controller.append_output("  Base URL: #{config.base_url}")
+        ui_controller.append_output("  Format: #{config.anthropic_format? ? 'Anthropic' : 'OpenAI'}")
+        ui_controller.append_output("")
+      end
+
+      # Handle the `/model` slash command — a quick model-card switcher.
+      #
+      # This is the lightweight counterpart to /config: it only lets the user
+      # pick an already-configured model and switches to it (no add/edit/delete).
+      # Switching goes through the unified Agent#switch_model_by_id path and
+      # also updates the global default so the choice sticks across launches,
+      # matching /config's :switch behavior.
+      private def handle_model_command(ui_controller, agent_config, agent, session_manager = nil)
+        config = agent_config
+
+        if config.models.empty?
+          ui_controller.show_error("No models configured. Run /config to add one.")
+          return
+        end
+
+        # Resolve a card's provider sub-models so the picker can offer them in
+        # the card's sub-model drawer.
+        submodels_for = lambda do |model|
+          base_url = model["base_url"]
+          provider_id = base_url && Clacky::Providers.find_by_base_url(base_url)
+          provider_id ? Clacky::Providers.models(provider_id) : []
+        end
+
+        result = ui_controller.show_model_switch_modal(config, submodels_for)
+        return if result.nil?
+
+        target_id = result[:model_id]
+        sub_model = result[:model_name]
+
+        agent.switch_model_by_id(target_id)
+        config.set_default_model_by_id(target_id)
+        config.save
+
+        # Pin (or clear) the per-session sub-model overlay for the chosen card.
+        agent.set_session_sub_model(sub_model)
+
+        # The overlay lives in the session file (not config.yml), so persist it
+        # now — otherwise it would be lost if the user quits before the next task.
+        session_manager&.save(agent.to_session_data(updated_at: Time.now))
+
+        ui_controller.config[:model] = config.model_name
+        ui_controller.update_sessionbar(
+          tasks: agent.total_tasks,
+          cost: agent.total_cost
+        )
+        ui_controller.show_success("Switched to model: #{config.model_name}")
+      end
+
+      # Handle the `/think` slash command — pick the reasoning effort level
+      # for the current session. "off" normalizes to nil (provider default),
+      # matching the Web UI's reasoning_effort switcher semantics.
+      private def handle_think_command(ui_controller, agent, session_manager = nil)
+        choice = ui_controller.show_reasoning_effort_menu(agent.reasoning_effort)
+        return if choice.nil?
+
+        agent.reasoning_effort = choice
+
+        # The override lives in the session file (not config.yml), so persist
+        # it now — otherwise it would be lost if the user quits before the
+        # next task.
+        session_manager&.save(agent.to_session_data(updated_at: Time.now))
+
+        # Reflect the change in the session bar (appended after the model name)
+        ui_controller.config[:reasoning_effort] = agent.reasoning_effort
+        ui_controller.update_sessionbar
+
+        current = agent.reasoning_effort
+        message = current ? "Thinking level set to #{current}" : "Thinking level: off (provider default)"
+        ui_controller.show_success(message)
+      end
+
+      private def handle_time_machine_command(ui_controller, agent, session_manager)
+        # Get task history from agent
+        history = agent.get_task_history(limit: 10)
+
+        if history.empty?
+          ui_controller.show_info("No task history available yet.")
+          return
+        end
+
+        # Show time machine menu
+        selected_task_id = ui_controller.show_time_machine_menu(history)
+
+        # If user cancelled, return
+        return if selected_task_id.nil?
+
+        # Get current active task for comparison
+        current_task_id = agent.instance_variable_get(:@active_task_id)
+
+        # Perform the switch
+        begin
+          if selected_task_id < current_task_id
+            # Undo to selected task
+            ui_controller.show_info("Undoing to Task #{selected_task_id}...")
+            result = agent.switch_to_task(selected_task_id)
+            if result[:success]
+              ui_controller.show_success("✓ #{result[:message]}")
+            else
+              ui_controller.show_error(result[:message])
+              return
+            end
+          else
+            # Redo to selected task
+            ui_controller.show_info("Redoing to Task #{selected_task_id}...")
+            result = agent.switch_to_task(selected_task_id)
+            if result[:success]
+              ui_controller.show_success("✓ #{result[:message]}")
+            else
+              ui_controller.show_error(result[:message])
+              return
+            end
+          end
+
+          # Save session after switch
+          if session_manager
+            session_manager.save(agent.to_session_data(status: :success, updated_at: Time.now))
+          end
+        rescue StandardError => e
+          ui_controller.show_error("Time Machine failed: #{e.message}")
+        end
+      end
+
+      # ── Brand license check (CLI mode) ──────────────────────────────────────
+      #
+      # CLI is a developer-oriented entrypoint: we never block startup with an
+      # interactive license prompt. Unactivated installs run in free mode; the
+      # WebUI is where end-users activate. This method only surfaces non-blocking
+      # warnings (expiry, offline grace period) and dispatches async heartbeats.
+      private def check_brand_license_cli
+        brand = Clacky::BrandConfig.load
+        return unless brand.branded?
+        return unless brand.activated?
+
+        Clacky::Logger.info("[Brand] check_brand_license_cli: activated=true expired=#{brand.expired?} expires_at=#{brand.license_expires_at&.iso8601 || "nil"} last_heartbeat=#{brand.license_last_heartbeat&.iso8601 || "nil"}")
+
+        if brand.expired?
+          Clacky::Logger.warn("[Brand] check_brand_license_cli: license expired at #{brand.license_expires_at&.iso8601}")
+          say ""
+          say "WARNING: Your #{brand.product_name} license has expired. Please renew to continue.", :yellow
+          say ""
+          return
+        end
+
+        if brand.heartbeat_due?
+          Clacky::Logger.info("[Brand] check_brand_license_cli: heartbeat due, dispatching async...")
+          Clacky::ThreadRegistry.spawn(name: "cli-brand-heartbeat") do
+            begin
+              result = brand.heartbeat!
+              if result[:success]
+                Clacky::Logger.info("[Brand] async heartbeat OK")
+              else
+                Clacky::Logger.warn("[Brand] async heartbeat failed — #{result[:message]}")
+              end
+            rescue StandardError => e
+              Clacky::Logger.warn("[Brand] async heartbeat raised: #{e.class}: #{e.message}")
+            end
+          end
+        else
+          Clacky::Logger.debug("[Brand] check_brand_license_cli: heartbeat not due yet")
+        end
+
+        if brand.grace_period_exceeded?
+          say ""
+          say "WARNING: Could not reach the #{brand.product_name} license server.", :yellow
+          say "License has been offline for more than 3 days. Please check your connection.", :yellow
+          say ""
+        end
+      end
+
+      CLI_DEFAULT_SESSION_NAME = "CLI Session"
+
+      # Format a number with thousand separators for display
+      # @param num [Integer, Float] The number to format
+      # @return [String] Formatted number string
+      private def format_number(num)
+        return "0" if num.nil? || num == 0
+        num.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse
+      end
+
+      # Auto-name a CLI session from the first user message, mirroring server-side logic.
+      # Renames when the agent has no history yet (i.e. first message of the session).
+      private def auto_name_session(agent, input)
+        return unless agent.history.empty?
+
+        auto_name = input.to_s.gsub(/\s+/, " ").strip[0, 30]
+        auto_name += "…" if input.to_s.strip.length > 30
+        agent.rename(auto_name)
+      end
+
+      # Format error message and backtrace (first 3 lines) for session saving
+      private def format_error(e)
+        "#{e.message}\n#{e.backtrace&.first(3)&.join("\n")}"
+      end
+
+      # Validates non-interactive file paths and maps them to hashes with detected MIME types
+      private def prepare_non_interactive_files(file_paths)
+        file_paths.each do |path|
+          raise ArgumentError, "File not found: #{path}" unless File.exist?(path)
+        end
+        # Convert file paths to file hashes — agent.run decides how to handle each
+        file_paths.map do |path|
+          mime = Utils::FileProcessor.detect_mime_type(path) rescue "application/octet-stream"
+          { name: File.basename(path), mime_type: mime, path: path }
+        end
+      end
+
+      def validate_working_directory(path, config = nil)
+        working_dir = path || Dir.pwd
+
+        # If no path specified and currently in home directory, use configured
+        # default_working_dir (or ~/clacky_workspace as fallback)
+        if path.nil? && File.expand_path(working_dir) == File.expand_path(Dir.home)
+          default = config&.default_working_dir || File.expand_path("~/clacky_workspace")
+          working_dir = File.expand_path(default)
+
+          # Create directory if it doesn't exist
+          unless Dir.exist?(working_dir)
+            FileUtils.mkdir_p(working_dir)
+          end
+        end
+
+        # Always expand to absolute path
+        working_dir = File.expand_path(working_dir)
+
+        # Validate directory exists
+        unless Dir.exist?(working_dir)
+          say "Error: Directory does not exist: #{working_dir}", :red
+          exit 1
+        end
+
+        # Validate it's a directory
+        unless File.directory?(working_dir)
+          say "Error: Path is not a directory: #{working_dir}", :red
+          exit 1
+        end
+
+        working_dir
+      end
+
+      def list_sessions
+        session_manager = Clacky::SessionManager.new
+        working_dir = validate_working_directory(options[:path])
+        sessions = session_manager.all_sessions(current_dir: working_dir, limit: 5)
+
+        if sessions.empty?
+          say "No sessions found.", :yellow
+          return
+        end
+
+        say "\n📋 Recent sessions:\n", :green
+        sessions.each_with_index do |session, index|
+          created_at = Time.parse(session[:created_at]).strftime("%Y-%m-%d %H:%M")
+          session_id = session[:session_id][0..7]
+          tasks = session.dig(:stats, :total_tasks) || 0
+          cost = session.dig(:stats, :total_cost_usd) || 0.0
+          name = session[:name].to_s.empty? ? "Unnamed session" : session[:name]
+          is_current_dir = session[:working_dir] == working_dir
+
+          dir_marker = is_current_dir ? "📍" : "  "
+          say "#{dir_marker} #{index + 1}. [#{session_id}] #{created_at} (#{tasks} tasks, $#{cost.round(4)}) - #{name}", :cyan
+        end
+        say "\n\n💡 Use `clacky -a <session_id>` to resume a session.", :yellow
+        say ""
+      end
+
+      def load_latest_session(client, agent_config, session_manager, working_dir, profile:)
+        session_data = session_manager.latest_for_directory(working_dir)
+
+        if session_data.nil?
+          say "No previous session found for this directory.", :yellow
+          return nil
+        end
+
+        # Prefer the agent_profile stored in the session; only fall back to the
+        # CLI --agent flag when the session predates the agent_profile field.
+        restored_profile = session_data[:agent_profile].to_s
+        resolved_profile = restored_profile.empty? ? profile : restored_profile
+
+        # Don't print message here - will be shown by UI after banner
+        Clacky::Agent.from_session(client, agent_config, session_data, profile: resolved_profile)
+      end
+
+      def load_session_by_number(client, agent_config, session_manager, working_dir, identifier, profile:)
+        # Get a larger list to search through (for ID prefix matching)
+        sessions = session_manager.all_sessions(current_dir: working_dir, limit: 100)
+
+        if sessions.empty?
+          say "No sessions found.", :yellow
+          return nil
+        end
+
+        session_data = nil
+
+        # Check if identifier is a number (index-based)
+        # Heuristic: If it's a small number (1-99), treat as index; otherwise treat as session ID prefix
+        if identifier.match?(/^\d+$/) && identifier.to_i <= 99
+          index = identifier.to_i - 1
+          if index < 0 || index >= sessions.size
+            say "Invalid session number. Use -l to list available sessions.", :red
+            exit 1
+          end
+          session_data = sessions[index]
+        else
+          # Treat as session ID prefix
+          matching_sessions = sessions.select { |s| s[:session_id].start_with?(identifier) }
+
+          if matching_sessions.empty?
+            say "No session found matching ID prefix: #{identifier}", :red
+            say "Use -l to list available sessions.", :yellow
+            exit 1
+          elsif matching_sessions.size > 1
+            say "Multiple sessions found matching '#{identifier}':", :yellow
+            matching_sessions.each_with_index do |session, idx|
+              created_at = Time.parse(session[:created_at]).strftime("%Y-%m-%d %H:%M")
+              session_id = session[:session_id][0..7]
+              name = session[:name].to_s.empty? ? "Unnamed session" : session[:name]
+              say "  #{idx + 1}. [#{session_id}] #{created_at} - #{name}", :cyan
+            end
+            say "\nPlease use a more specific prefix.", :yellow
+            exit 1
+          else
+            session_data = matching_sessions.first
+          end
+        end
+
+        # Prefer the agent_profile stored in the session; fall back to CLI --agent flag
+        # for sessions that predate the agent_profile field.
+        restored_profile = session_data[:agent_profile].to_s
+        resolved_profile = restored_profile.empty? ? profile : restored_profile
+
+        # Don't print message here - will be shown by UI after banner
+        Clacky::Agent.from_session(client, agent_config, session_data, profile: resolved_profile)
+      end
+
+      def fork_session(client, agent_config, session_manager, working_dir, identifier, profile:)
+        # Get a larger list to search through (for ID prefix matching)
+        sessions = session_manager.all_sessions(current_dir: working_dir, limit: 100)
+
+        if sessions.empty?
+          say "No sessions found.", :yellow
+          return nil
+        end
+
+        session_data = nil
+
+        # Same resolution logic as load_session_by_number
+        if identifier.match?(/^\d+$/) && identifier.to_i <= 99
+          index = identifier.to_i - 1
+          if index < 0 || index >= sessions.size
+            say "Invalid session number. Use -l to list available sessions.", :red
+            exit 1
+          end
+          session_data = sessions[index]
+        else
+          matching_sessions = sessions.select { |s| s[:session_id].start_with?(identifier) }
+          if matching_sessions.empty?
+            say "No session found matching ID prefix: #{identifier}", :red
+            say "Use -l to list available sessions.", :yellow
+            exit 1
+          elsif matching_sessions.size > 1
+            say "Multiple sessions found matching '#{identifier}':", :yellow
+            matching_sessions.each_with_index do |session, idx|
+              created_at = Time.parse(session[:created_at]).strftime("%Y-%m-%d %H:%M")
+              s_id = session[:session_id][0..7]
+              name = session[:name].to_s.empty? ? "Unnamed session" : session[:name]
+              say "  #{idx + 1}. [#{s_id}] #{created_at} - #{name}", :cyan
+            end
+            say "\nPlease use a more specific prefix.", :yellow
+            exit 1
+          else
+            session_data = matching_sessions.first
+          end
+        end
+
+        fork_data = session_manager.fork(session_data[:session_id])
+        return nil unless fork_data
+
+        # Fall back to CLI --agent flag for sessions that predate agent_profile
+        restored_profile = fork_data[:agent_profile].to_s
+        resolved_profile = restored_profile.empty? ? profile : restored_profile
+
+        Clacky::Agent.from_session(client, agent_config, fork_data, profile: resolved_profile)
+      end
+
+      # Handle agent error/interrupt with cleanup
+      def handle_agent_exception(ui_controller, agent, session_manager, exception)
+        ui_controller.show_progress(phase: "done")
+        ui_controller.set_idle_status
+
+        if exception.is_a?(Clacky::AgentInterrupted)
+          session_manager&.save(agent.to_session_data(status: :interrupted, updated_at: Time.now))
+          ui_controller.show_warning("Task interrupted by user")
+        else
+          error_message = format_error(exception)
+          session_manager&.save(agent.to_session_data(status: :error, error_message: error_message, updated_at: Time.now))
+          code = exception.is_a?(Clacky::InsufficientCreditError) ? exception.error_code : nil
+          ui_controller.show_error("Error: #{exception.message}", code: code)
+        end
+      end
+
+      # Run agent non-interactively with a single message, then exit.
+      # Forces auto_approve mode so no human confirmation is needed.
+      # Output goes directly to stdout; exits with code 0 on success, 1 on error.
+      def run_non_interactive(agent, message, file_paths, agent_config, session_manager)
+        # Force auto-approve — no one is around to confirm anything
+        agent_config.permission_mode = :auto_approve
+
+        is_json = !!options[:json]
+
+        # Validate and prepare files up-front (DRY)
+        begin
+          files = prepare_non_interactive_files(file_paths)
+        rescue => e
+          session_manager&.save(agent.to_session_data(status: :error, error_message: format_error(e), updated_at: Time.now))
+
+          if is_json
+            ui = Clacky::JsonUIController.new
+            ui.emit("error", message: e.message)
+            ui.set_idle_status
+          else
+            $stderr.puts "Error: #{e.message}"
+          end
+          exit(1)
+        end
+
+
+        # Wire up the appropriate UI controller and execute
+        if is_json
+          ui = Clacky::JsonUIController.new
+          agent.instance_variable_set(:@ui, ui)
+          ui.emit("system", message: "Agent started", model: agent_config.model_name, working_dir: agent.working_dir)
+
+          status = run_json_task(agent, ui, session_manager) do
+            auto_name_session(agent, message)
+            agent.run(message, files: files)
+          end
+
+          if status == :success
+            ui.emit("done", total_cost: agent.total_cost, total_tasks: agent.total_tasks)
+            exit(0)
+          else
+            exit(1)
+          end
+        else
+          ui = Clacky::PlainUIController.new
+          agent.instance_variable_set(:@ui, ui)
+
+          begin
+            auto_name_session(agent, message)
+            agent.run(message, files: files)
+            session_manager&.save(agent.to_session_data(status: :success, updated_at: Time.now))
+            exit(0)
+          rescue Clacky::AgentInterrupted
+            session_manager&.save(agent.to_session_data(status: :interrupted, updated_at: Time.now))
+            $stderr.puts "\nInterrupted."
+            exit(1)
+          rescue => e
+            session_manager&.save(agent.to_session_data(status: :error, error_message: format_error(e), updated_at: Time.now))
+            $stderr.puts "Error: #{e.message}"
+            exit(1)
+          end
+        end
+      end
+
+      # Run agent with JSON (NDJSON) output mode — persistent process.
+      # Reads JSON messages from stdin, writes NDJSON events to stdout.
+      # Stays alive until "/exit", {"type":"exit"}, or stdin EOF.
+      #
+      # Input protocol (one JSON per line on stdin):
+      #   {"type":"message","content":"..."}          — run agent with this message
+      #   {"type":"message","content":"...","files":[{"name":"x.jpg","mime_type":"image/jpeg","data_url":"data:..."}]} — with files
+      #   {"type":"exit"}                             — graceful shutdown
+      #   {"type":"confirmation","id":"conf_1","result":"yes"} — answer to request_confirmation
+      #
+      # If a bare string line is received it is treated as a message content.
+      def run_agent_with_json(agent, working_dir, agent_config, session_manager, client_factory, profile:)
+        json_ui = Clacky::JsonUIController.new
+        agent.instance_variable_set(:@ui, json_ui)
+
+        json_ui.emit("system", message: "Agent started", model: agent_config.model_name, working_dir: working_dir)
+
+        # Persistent input loop — read JSON lines from stdin
+        while (line = $stdin.gets)
+          line = line.strip
+          next if line.empty?
+
+          # Parse input
+          input = begin
+                    JSON.parse(line)
+                  rescue JSON::ParserError
+                    # Treat bare string as a message
+                    { "type" => "message", "content" => line }
+                  end
+
+          type = input["type"] || "message"
+
+          case type
+          when "message"
+            content = input["content"].to_s.strip
+            if content.empty?
+              json_ui.emit("error", message: "Empty message content")
+              next
+            end
+
+
+            # Handle built-in commands
+            case content.downcase
+            when "/exit", "/quit"
+              break
+            when "/clear"
+              # Fresh Client from factory — guarantees credentials reflect the
+              # *current* agent_config (any /config model switch since startup
+              # is applied automatically). No stale shared client reference.
+              agent = Clacky::Agent.new(client_factory.call, agent_config, working_dir: working_dir, ui: nil, profile: profile,
+                                        session_id: Clacky::SessionManager.generate_id, source: :manual)
+              agent.instance_variable_set(:@ui, json_ui)
+              json_ui.emit("info", message: "Session cleared. Starting fresh.")
+              next
+            end
+
+            files = input["files"] || []
+            auto_name_session(agent, content)
+            run_json_task(agent, json_ui, session_manager) { agent.run(content, files: files) }
+          when "exit"
+            break
+          else
+            json_ui.emit("error", message: "Unknown input type: #{type}")
+          end
+        end
+
+        # Final session save and shutdown
+        if session_manager && agent.total_tasks > 0
+          session_manager.save(agent.to_session_data(status: :exited, updated_at: Time.now))
+        end
+        json_ui.emit("done", total_cost: agent.total_cost, total_tasks: agent.total_tasks)
+      end
+
+      # Execute a single agent task inside the JSON loop, with error handling.
+      def run_json_task(agent, json_ui, session_manager)
+        json_ui.set_working_status
+        yield
+        session_manager&.save(agent.to_session_data(status: :success, updated_at: Time.now))
+        json_ui.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+        :success
+      rescue Clacky::AgentInterrupted
+        session_manager&.save(agent.to_session_data(status: :interrupted, updated_at: Time.now))
+        json_ui.emit("interrupted")
+        :interrupted
+      rescue => e
+        session_manager&.save(agent.to_session_data(status: :error, error_message: format_error(e), updated_at: Time.now))
+        json_ui.emit("error", message: e.message)
+        :error
+      ensure
+        json_ui.set_idle_status
+      end
+
+      # Run agent with UI2 split-screen interface
+      def run_agent_with_ui2(agent, working_dir, agent_config, session_manager = nil, client_factory = nil, is_session_load: false)
+        # Brand license check — must happen before UI2 starts (raw terminal mode conflict)
+        check_brand_license_cli
+
+        ui_name = (options[:ui] || ENV["OPENCLACKY_UI"] || "ui2").to_s
+
+        ui_controller = if ui_name == "rich"
+          if Gem::Version.new(RUBY_VERSION) < Gem::Version.new("2.6.0")
+            say "Error: Rich UI requires Ruby >= 2.6. Use --ui ui2 on Ruby #{RUBY_VERSION}.", :red
+            exit 1
+          end
+          require_relative "rich_ui"
+          RichUIController.new(
+            working_dir: working_dir,
+            mode: agent_config.permission_mode.to_s,
+            model: agent_config.model_name,
+            model_names: agent_config.model_names,
+            theme: options[:theme]
+          )
+        else
+          unless ui_name == "ui2"
+            say "Error: Unknown UI '#{ui_name}'. Available UIs: ui2, rich", :red
+            exit 1
+          end
+          # Detect terminal background BEFORE starting UI2 to avoid output interference
+          is_dark_bg = UI2::TerminalDetector.detect_dark_background
+
+          # Pass detected background mode to theme manager (singleton)
+          UI2::ThemeManager.instance.set_background_mode(is_dark_bg)
+
+          # Validate theme
+          theme_name = options[:theme] || "hacker"
+          available_themes = UI2::ThemeManager.available_themes.map(&:to_s)
+          unless available_themes.include?(theme_name)
+            say "Error: Unknown theme '#{theme_name}'. Available themes: #{available_themes.join(', ')}", :red
+            exit 1
+          end
+
+          # Create UI2 controller with configuration
+          UI2::UIController.new(
+            working_dir: working_dir,
+            mode: agent_config.permission_mode.to_s,
+            model: agent_config.model_name,
+            reasoning_effort: agent.reasoning_effort,
+            theme: theme_name
+          )
+        end
+
+        # Inject UI into agent
+        agent.instance_variable_set(:@ui, ui_controller)
+
+        # Inject current session id into UI session bar (parity with WebUI #sib-id)
+        ui_controller.update_sessionbar(session_id: agent.session_id)
+
+        # Set skill loader for command suggestions, filtered by agent profile whitelist
+        ui_controller.set_skill_loader(agent.skill_loader, agent.agent_profile)
+
+        # Track current working thread (agent or idle compression that can be interrupted)
+        current_task_thread = nil
+        input_submission_mutex = Mutex.new
+        shutting_down = false
+
+        # Idle compression timer - triggers compression after 180s of inactivity
+        idle_timer = Clacky::IdleCompressionTimer.new(
+          agent:           agent,
+          session_manager: session_manager,
+          logger:          ->(msg, level:) { ui_controller.log(msg, level: level) }
+        ) do |success|
+          if success
+            ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+          end
+          ui_controller.set_idle_status
+        end
+
+        # Set up mode toggle handler
+        ui_controller.on_mode_toggle do |new_mode|
+          agent_config.permission_mode = new_mode.to_sym
+        end
+
+        # Set up model switch handler (from /model slash command)
+        ui_controller.on_model_switch do |model, persist|
+          next unless agent_config.switch_model_by_name(model)
+
+          id = agent_config.current_model_id
+          agent.switch_model_by_id(id)
+          if persist
+            agent_config.set_default_model_by_id(id)
+            agent_config.save
+            ui_controller.show_success("Model switched to #{model} (saved)")
+          else
+            ui_controller.show_success("Model switched to #{model} (session only)")
+          end
+        end
+
+        # Set up time machine handler (ESC key)
+        ui_controller.on_time_machine do
+          handle_time_machine_command(ui_controller, agent, session_manager)
+        end
+
+        # Set up interrupt handler
+        ui_controller.on_interrupt do |input_was_empty:|
+          # Priority 1: if idle compression work is actually in flight,
+          # Ctrl+C should stop compression — not exit the program. The
+          # compress thread rolls back history cleanly on AgentInterrupted.
+          if idle_timer.compressing?
+            idle_timer.cancel
+            ui_controller.show_progress(phase: "done")
+            ui_controller.set_idle_status
+            ui_controller.show_warning("Compression interrupted by user")
+            ui_controller.clear_input
+            next
+          end
+
+          if (not current_task_thread&.alive?) && input_was_empty
+            # Rich UI: require double-tap Ctrl+C to exit.  When the user
+            # just copied terminal-native text selection, the viewport
+            # has no knowledge of the selection, yet Ctrl+C must not exit.
+            # First press only sets the warning; second press exits.
+            if ui_controller.respond_to?(:ctrl_c_warning) && !ui_controller.ctrl_c_warning
+              ui_controller.instance_variable_set(:@ctrl_c_warning, "Press Ctrl+C again to exit")
+              ui_controller.set_input_tips("Press Ctrl+C again to exit.", type: :info)
+              next
+            end
+
+            # Save final session state before exit
+            if session_manager && agent.total_tasks > 0
+              session_data = agent.to_session_data(status: :exited, updated_at: Time.now)
+              saved_path = session_manager.save(session_data)
+
+              # Show session saved message in output area (before stopping UI)
+              session_id = session_data[:session_id][0..7]
+              ui_controller.append_output("")
+              ui_controller.append_output("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+              ui_controller.append_output("")
+              ui_controller.append_output("Session saved: #{saved_path}")
+              ui_controller.append_output("Tasks completed: #{agent.total_tasks}")
+              ui_controller.append_output("Total cost: $#{agent.total_cost.round(4)}")
+              ui_controller.append_output("")
+              ui_controller.append_output("To continue this session, run:")
+              ui_controller.append_output("  clacky -a #{session_id}")
+              ui_controller.append_output("")
+            end
+
+            # Stop UI and exit. Each UI decides whether to clear the screen on
+            # exit (UI2 keeps it so the resume hint survives; Rich clears).
+            shutting_down = true
+            idle_timer.shutdown
+            ui_controller.stop
+            exit(0)
+          end
+
+          if current_task_thread&.alive?
+            current_task_thread.raise(Clacky::AgentInterrupted, "User interrupted")
+          end
+          ui_controller.clear_input
+          ui_controller.set_input_tips("Press Ctrl+C again to exit.", type: :info)
+        end
+
+        # Set up input handler
+        if ui_controller.respond_to?(:queue_input_while_running=)
+          ui_controller.queue_input_while_running = -> { current_task_thread&.alive? && %w[queue steer].include?(agent_config.input_behavior) }
+        end
+        if ui_controller.respond_to?(:input_area)
+          ui_controller.input_area.guidance_lines_provider = -> { ui_controller.guidance_lines }
+        end
+        ui_controller.show_input_queue(agent.pending_inputs) if ui_controller.respond_to?(:show_input_queue)
+        handle_input = lambda do |input, files, display: nil, force_interrupt: false|
+          if input.to_s.match?(%r{\A/input-mode(?:\s|\z)})
+            mode = input.split[1]
+            if %w[queue interrupt steer].include?(mode)
+              agent_config.input_behavior = mode
+              agent_config.save
+              ui_controller.show_info("Input mode: #{mode}")
+            else
+              ui_controller.show_info("Current input mode: #{agent_config.input_behavior}\n/input-mode queue · /input-mode steer · /input-mode interrupt")
+            end
+            next
+          end
+
+          # Handle commands
+          case input.downcase.strip
+          when "/config"
+            handle_config_command(ui_controller, agent_config, agent)
+            next
+          when "/model"
+            handle_model_command(ui_controller, agent_config, agent, session_manager)
+            next
+          when "/think"
+            handle_think_command(ui_controller, agent, session_manager)
+            next
+          when "/undo"
+            handle_time_machine_command(ui_controller, agent, session_manager)
+            next
+          when "/clear"
+            sleep 0.1
+            # Clear output area
+            ui_controller.layout.clear_output
+            # Cancel old idle timer before replacing agent to avoid stale-agent compression
+            idle_timer.cancel
+            # Fresh Client built from the *current* agent_config (picks up any
+            # /config model switch made during this session). Never reuse a
+            # long-lived `client` — a previous implementation did, and after
+            # a DSK → Opus switch the reused Client carried stale @model /
+            # @use_bedrock, causing /chat/completions 404s on openclacky.com.
+            agent = Clacky::Agent.new(client_factory.call, agent_config, working_dir: working_dir, ui: ui_controller, profile: agent.agent_profile.name, session_id: Clacky::SessionManager.generate_id, source: :manual)
+            # Rebuild idle timer bound to the new agent
+            idle_timer = Clacky::IdleCompressionTimer.new(
+              agent:           agent,
+              session_manager: session_manager,
+              logger:          ->(msg, level:) { ui_controller.log(msg, level: level) }
+            ) do |success|
+              if success
+                ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+              end
+              ui_controller.set_idle_status
+            end
+            ui_controller.show_info("Session cleared. Starting fresh.")
+            # Update session bar with reset values
+            ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost, session_id: agent.session_id)
+            # Clear todo area display
+            ui_controller.update_todos([])
+            next
+          when "/exit", "/quit"
+            shutting_down = true
+            idle_timer.shutdown
+            ui_controller.stop
+            exit(0)
+          when "/help"
+            sleep 0.1
+            ui_controller.show_help
+            next
+          end
+
+          queued = input_submission_mutex.synchronize do
+            if !force_interrupt && current_task_thread&.alive? && %w[queue steer].include?(agent_config.input_behavior)
+              agent.enqueue_input(input, delivery: agent_config.input_behavior.to_sym, files: files, created_at: Time.now.to_f)
+              true
+            end
+          end
+          next if queued
+
+          # If any task thread is running, interrupt it first
+          if current_task_thread&.alive?
+            current_task_thread.raise(Clacky::AgentInterrupted, "New input received")
+            unless current_task_thread.join(2)
+              agent.enqueue_input(input, files: files, created_at: Time.now.to_f)
+              ui_controller.show_info("Current task is still stopping. Your message remains queued.")
+              next
+            end
+            ui_controller.set_idle_status
+          end
+
+          if force_interrupt
+            ui_controller.show_user_message(input, files: files, steering: true)
+          end
+
+          # Cancel idle timer if running (new input means user is active)
+          idle_timer.cancel
+
+          auto_name_session(agent, input)
+
+          # Run agent in background thread
+          current_task_thread = Clacky::ThreadRegistry.spawn(name: "cli-agent-task") do
+            begin
+              # Set status to working when agent starts
+              ui_controller.set_working_status
+
+              # Run agent (Agent will call @ui methods directly)
+              # Agent internally tracks total_tasks and total_cost
+              result = agent.run(input, files: files)
+              loop do
+                if session_manager
+                  session_manager.save(agent.to_session_data(status: :success, updated_at: Time.now))
+                end
+                ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+                pending = input_submission_mutex.synchronize do
+                  entry = agent.take_pending_input if Agent.task_completed?(result)
+                  current_task_thread = nil unless entry
+                  entry
+                end
+                break unless pending
+                result = agent.run_pending_input(pending)
+              end
+            rescue Clacky::AgentInterrupted, StandardError => e
+              begin
+                handle_agent_exception(ui_controller, agent, session_manager, e)
+              rescue StandardError => ex
+                # If handle_agent_exception itself raises (e.g. UI in bad state),
+                # prevent the thread from dying with an unhandled exception.
+                $stderr.puts "[cli] handle_agent_exception failed: #{ex.class}: #{ex.message}"
+              end
+            ensure
+              input_submission_mutex.synchronize do
+                current_task_thread = nil if current_task_thread == Thread.current
+                idle_timer.start unless shutting_down || current_task_thread&.alive?
+              end
+            end
+          end
+        end
+
+        ui_controller.on_input do |input, files, display: nil|
+          handle_input.call(input, files, display: display)
+        end
+        ui_controller.on_guidance_action do |action, id|
+          # Claim the displayed message once; an already-consumed ID is a no-op.
+          entry = agent.remove_pending_input(id)
+          if entry && action == :send_now
+            handle_input.call(entry[:content], entry.dig(:options, :files) || [], force_interrupt: true)
+          end
+        end if ui_controller.respond_to?(:on_guidance_action)
+
+        # Initialize UI screen first
+        if is_session_load
+          recent_user_messages = agent.get_recent_user_messages(limit: 5)
+          ui_controller.initialize_and_show_banner(recent_user_messages: recent_user_messages)
+          # Update session bar with restored agent stats
+          ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+        else
+          ui_controller.initialize_and_show_banner
+        end
+
+        # Start input loop (blocks until exit)
+        ui_controller.start_input_loop
+
+        # Cleanup: kill any running threads
+        shutting_down = true
+        idle_timer.shutdown
+        current_task_thread&.kill
+
+        # Save final session state
+        if session_manager && agent.total_tasks > 0
+          session_manager.save(agent.to_session_data(updated_at: Time.now))
+        end
+      end
+
+
+
+    end
+
+    # ── billing command ────────────────────────────────────────────────────────
+    desc "patch_new ID TARGET", "Scaffold a runtime patch for a method (TARGET like Clacky::Tools::WebSearch#execute)"
+    long_desc <<-LONGDESC
+      Generate a method-override patch under ~/.clacky/patches/ID/. The current
+      method fingerprint is computed automatically and stored in meta.yml; you
+      only edit the method body in patch.rb. If a future gem version changes the
+      targeted method, the fingerprint will no longer match and the patch is
+      auto-disabled on next start (rather than applied and risking breakage).
+
+      Examples:
+        $ clacky patch_new fix-search Clacky::Tools::WebSearch#execute -d "bump timeout"
+    LONGDESC
+    option :desc, type: :string, aliases: "-d", default: "", desc: "Short description"
+    def patch_new(id, target)
+      require_relative "extension/patch_loader"
+      path = Clacky::PatchLoader.scaffold(id, target, description: options[:desc])
+      puts "Created patch: #{path}"
+      puts "Edit patch.rb, then run: clacky patch_verify"
+    rescue ArgumentError, StandardError => e
+      warn "Error: #{e.message}"
+      exit 1
+    end
+
+    desc "patch_verify", "Load ~/.clacky/patches/ and report applied / disabled / skipped"
+    def patch_verify
+      require "clacky"
+      result = Clacky::PatchLoader.last_result
+
+      if result.applied.empty? && result.disabled.empty? && result.skipped.empty?
+        puts "No patches found in ~/.clacky/patches/"
+        return
+      end
+
+      result.applied.each  { |id| puts "[OK]       #{id}" }
+      result.disabled.each { |(id, reason)| puts "[DISABLED] #{id} — #{reason}" }
+      result.skipped.each  { |(id, reason)| puts "[SKIP]     #{id} — #{reason}" }
+      exit 1 if result.skipped.any?
+    end
+
+    desc "patch_list", "List patches under ~/.clacky/patches/ and their status"
+    def patch_list
+      invoke :patch_verify, []
+    end
+
+    desc "hook_new", "Scaffold a starter ~/.clacky/hooks.yml with an example guard script"
+    def hook_new
+      require_relative "shell_hook_loader"
+      path = Clacky::ShellHookLoader.scaffold
+      puts "Created hooks config: #{path}"
+      puts "Edit it, then run: clacky hook_verify"
+    rescue ArgumentError => e
+      warn "Error: #{e.message}"
+      exit 1
+    end
+
+    desc "hook_verify", "Load ~/.clacky/hooks.yml and report which hooks register"
+    def hook_verify
+      require_relative "agent/hook_manager"
+      require_relative "shell_hook_loader"
+      hm = Clacky::HookManager.new
+      result = Clacky::ShellHookLoader.load_into(hm)
+
+      if result.registered.empty? && result.skipped.empty?
+        puts "No hooks found in ~/.clacky/hooks.yml"
+        return
+      end
+
+      result.registered.each { |(event, name)| puts "[OK]   #{event} → #{name}" }
+      result.skipped.each { |(name, reason)| puts "[SKIP] #{name} — #{reason}" }
+      exit 1 if result.skipped.any?
+    end
+
+    desc "channel_new NAME", "Scaffold a custom channel adapter at ~/.clacky/channels/NAME/"
+    long_desc <<-LONGDESC
+      Generate a ready-to-edit channel adapter skeleton. The skeleton already
+      self-registers and implements the full adapter interface with TODO markers —
+      you only fill in the method bodies, then run `clacky channel_verify`.
+
+      Examples:
+        $ clacky channel_new slack
+    LONGDESC
+    def channel_new(name)
+      require_relative "server/channel"
+      path = Clacky::Channel::Adapters::UserAdapterLoader.scaffold(name)
+      puts "Created channel adapter: #{path}"
+      puts "Edit the TODO sections, then run: clacky channel_verify"
+    rescue ArgumentError => e
+      warn "Error: #{e.message}"
+      exit 1
+    end
+
+    desc "channel_verify", "Load user channel adapters and report which are valid"
+    def channel_verify
+      require_relative "server/channel"
+      result = Clacky::Channel::Adapters::UserAdapterLoader.last_result
+
+      if result.loaded.empty? && result.skipped.empty?
+        puts "No custom channel adapters found in ~/.clacky/channels/"
+        return
+      end
+
+      result.loaded.each { |n| puts "[OK]   #{n}" }
+      result.skipped.each { |(n, reason)| puts "[SKIP] #{n} — #{reason}" }
+      exit 1 if result.skipped.any?
+    end
+
+    desc "ext SUBCOMMAND", "Manage extension containers (new, verify, list, pack, install, publish, search)"
+    subcommand "ext", Clacky::CliExtensionCommands
+
+    desc "mcp SUBCOMMAND", "Manage MCP server connections and OAuth authorization"
+    subcommand "mcp", Clacky::Mcp::CliCommands
+
+    desc "billing", "Show billing summary and usage statistics"
+    long_desc <<-LONGDESC
+      Display billing summary with token usage and cost breakdown.
+
+      Period options:
+        day    - Today's usage
+        week   - Last 7 days
+        month  - Current month (default)
+        year   - Current year
+        all    - All time
+
+      Examples:
+        $ clacky billing
+        $ clacky billing --period week
+        $ clacky billing --period all --json
+    LONGDESC
+    option :period, type: :string, default: "month",
+           desc: "Time period: day, week, month, year, all (default: month)"
+    option :json, type: :boolean, default: false,
+           desc: "Output as JSON"
+    option :days, type: :numeric, default: 30,
+           desc: "Number of days for daily breakdown (default: 30)"
+    option :help, type: :boolean, aliases: "-h", desc: "Show this help message"
+    def billing
+      if options[:help]
+        invoke :help, ["billing"]
+        return
+      end
+
+      require_relative "billing/billing_store"
+
+      store = Clacky::Billing::BillingStore.new
+      period = options[:period].to_sym
+      summary = store.summary(period: period)
+
+      if options[:json]
+        require "json"
+        puts JSON.pretty_generate(summary)
+        return
+      end
+
+      # Display formatted billing summary
+      puts ""
+      puts "📊 Billing Summary (#{period})"
+      puts "─" * 50
+      puts ""
+
+      # Total cost
+      cost_str = summary[:total_cost] > 0 ? "$#{format('%.4f', summary[:total_cost])}" : "$0.0000"
+      puts "  💰 Total Cost:       #{cost_str}"
+      puts "  📝 Total Tokens:     #{format_number(summary[:total_tokens])}"
+      puts "  📥 Prompt Tokens:    #{format_number(summary[:prompt_tokens])}"
+      puts "  📤 Completion:       #{format_number(summary[:completion_tokens])}"
+      puts "  🗄️  Cache Read:       #{format_number(summary[:cache_read_tokens])}"
+      puts "  📝 Cache Write:      #{format_number(summary[:cache_write_tokens])}"
+      puts "  🔢 API Requests:     #{summary[:record_count]}"
+      puts ""
+
+      # By model breakdown
+      if summary[:by_model] && !summary[:by_model].empty?
+        puts "📈 By Model:"
+        puts "─" * 50
+        summary[:by_model].each do |model, data|
+          cost = data.is_a?(Hash) ? data[:cost] : data
+          requests = data.is_a?(Hash) ? data[:requests] : "?"
+          puts "  #{model}"
+          puts "    Cost: $#{format('%.4f', cost)}  |  Requests: #{requests}"
+        end
+        puts ""
+      end
+
+      # Daily breakdown (last N days)
+      daily = store.daily_breakdown(days: [options[:days], 14].min)
+      recent_days = daily.select { |d| d[:cost] > 0 }.last(7)
+
+      if recent_days.any?
+        puts "📅 Recent Daily Usage:"
+        puts "─" * 50
+        recent_days.each do |day|
+          bar_len = [(day[:cost] * 100).to_i, 30].min
+          bar = "█" * bar_len
+          puts "  #{day[:date]}  $#{format('%.4f', day[:cost])}  #{bar}"
+        end
+        puts ""
+      end
+
+      puts "─" * 50
+      puts "  Data stored in: ~/.clacky/billing/"
+      puts ""
+    end
+
+    # ── server command ─────────────────────────────────────────────────────────
+    desc "server", "Start the Clacky web UI server"
+    long_desc <<-LONGDESC
+      Start a long-running HTTP + WebSocket server that serves the Clacky web UI.
+
+      Open http://localhost:7070 in your browser to access the multi-session interface.
+      Multiple sessions (e.g. "coding", "copywriting") can run simultaneously.
+
+      Examples:
+        $ clacky server
+        $ clacky server --port 8080
+        $ clacky server --port 7070 --strict-port
+    LONGDESC
+    option :host, type: :string, aliases: ["-b", "--bind"], default: "127.0.0.1", desc: "Bind host (default: 127.0.0.1)"
+    option :port, type: :numeric, aliases: "-p", default: 7070, desc: "Listen port (default: 7070)"
+    option :task_cgroup, type: :string, desc: "Linux cgroup v2 parent for terminal and browser MCP workloads"
+    option :strict_port, type: :boolean, default: false,
+           desc: "Fail if the requested port is occupied instead of trying fallback ports"
+    option :brand_test, type: :boolean, default: false,
+           desc: "Enable brand test mode: mock license activation without calling remote API"
+    option :no_compression, type: :boolean, default: false,
+           desc: "Disable message compression (saves tokens but may lose context)"
+    option :no_memory, type: :boolean, default: false,
+           desc: "Disable automatic memory updates"
+    option :no_caching, type: :boolean, default: false,
+           desc: "Disable prompt caching"
+    option :no_skill_evolution, type: :boolean, default: false,
+           desc: "Disable automatic skill evolution"
+    option :help, type: :boolean, aliases: "-h", desc: "Show this help message"
+    def server
+      if options[:help]
+        invoke :help, ["server"]
+        return
+      end
+
+      if options[:task_cgroup]
+        require_relative "utils/resource_group"
+        Clacky::Utils::ResourceGroup.validate!(options[:task_cgroup])
+        ENV["CLACKY_TASK_CGROUP"] = options[:task_cgroup]
+      end
+
+      # ── Security gate ──────────────────────────────────────────────────────
+      # Binding to 0.0.0.0 exposes the server to the public network.
+      # Refuse to start unless an access key is available.
+      if options[:host] == "0.0.0.0" && !ENV.key?("CLACKY_ACCESS_KEY") && Clacky::AccessKey.from_file.nil?
+        puts <<~MSG
+          ╔══════════════════════════════════════════════════════════════╗
+          ║  ⚠️  Security Warning: Refusing to start                      ║
+          ╠══════════════════════════════════════════════════════════════╣
+          ║                                                              ║
+          ║  Binding to 0.0.0.0 exposes Clacky to the public network.    ║
+          ║  You must set CLACKY_ACCESS_KEY before starting the server.  ║
+          ║                                                              ║
+          ║  Generate a secure key:                                      ║
+          ║    openssl rand -hex 32                                      ║
+          ║                                                              ║
+          ║  Then export it:                                             ║
+          ║    export CLACKY_ACCESS_KEY=<your-generated-key>             ║
+          ║                                                              ║
+          ║  Or write it to ~/.clacky/access_key                         ║
+          ║                                                              ║
+          ╚══════════════════════════════════════════════════════════════╝
+        MSG
+        exit(1)
+      end
+      # ─────────────────────────────────────────────────────────────────────
+
+      if ENV["CLACKY_WORKER"] == "1"
+        # ── Worker mode ───────────────────────────────────────────────────────
+        # Spawned by Master. Inherit the listen socket from the file descriptor
+        # passed via CLACKY_INHERIT_FD, and report back to master via CLACKY_MASTER_PID.
+        require_relative "server/http_server"
+        require_relative "server/epipe_safe_io"
+
+        # Protect $stdout / $stderr from Errno::EPIPE.
+        #
+        # The worker inherits fd 1/2 from the Master process. If the Master's
+        # stdout pipe ever breaks (e.g. it was launched by an installer or GUI
+        # that has since exited), the next `puts` would raise Errno::EPIPE and
+        # crash the worker — destroying all in-memory sessions, agent loops,
+        # and SSE connections, and looping forever because the respawned
+        # worker inherits the same broken fd.
+        #
+        # In healthy state these wrappers are transparent — output goes to
+        # the user's terminal as usual. On first broken-pipe failure they
+        # silently fall back to /dev/null and the worker stays alive.
+        $stdout = Clacky::Server::EPIPESafeIO.new($stdout)
+        $stderr = Clacky::Server::EPIPESafeIO.new($stderr)
+
+        fd              = ENV["CLACKY_INHERIT_FD"].to_i
+        master_pid      = ENV["CLACKY_MASTER_PID"].to_i
+        # Must use TCPServer.for_fd (not Socket.for_fd) so that accept_nonblock
+        # returns a single Socket, not [Socket, Addrinfo] — WEBrick expects the former.
+        socket     = TCPServer.for_fd(fd)
+
+        # Only echo to console when there's a real terminal. Under a LaunchAgent
+        # stderr is redirected to the log file, and echoing would duplicate every
+        # line the Logger already wrote to that same file.
+        Clacky::Logger.console = $stderr.isatty
+        Clacky::Logger.info("[cli worker PID=#{Process.pid}] CLACKY_INHERIT_FD=#{fd} CLACKY_MASTER_PID=#{master_pid} socket=#{socket.class} fd=#{socket.fileno}")
+
+        agent_config = Clacky::AgentConfig.load
+        agent_config.permission_mode = :confirm_all
+
+        # Apply CLI overrides to agent config (--no-compression etc.)
+        # These override whatever is stored in config.yml.
+        agent_config.enable_compression = false if options[:no_compression]
+        agent_config.memory_update_enabled = false if options[:no_memory]
+        agent_config.enable_prompt_caching = false if options[:no_caching]
+        if options[:no_skill_evolution]
+          agent_config.skill_evolution[:enabled] = false
+        end
+
+        client_factory = lambda do
+          entry = agent_config.current_model
+          Clacky::Client.new(
+            agent_config.api_key,
+            base_url: agent_config.base_url,
+            model: agent_config.model_name,
+            anthropic_format: agent_config.anthropic_format?,
+          )
+        end
+
+        Clacky::Server::HttpServer.new(
+          host:           options[:host],
+          port:           options[:port],
+          agent_config:   agent_config,
+          client_factory: client_factory,
+          brand_test:     options[:brand_test],
+          socket:         socket,
+          master_pid:     master_pid
+        ).start
+      else
+        # ── Master mode ───────────────────────────────────────────────────────
+        # First invocation by the user. Start the Master process which holds the
+        # socket and supervises worker processes.
+        require_relative "server/server_master"
+
+        if options[:brand_test]
+          say "⚡ Brand test mode — license activation uses mock data (no remote API calls).", :yellow
+          say ""
+          say "  Test license keys (paste any into Settings → Brand & License):", :cyan
+          say ""
+          say "    00000001-FFFFFFFF-DEADBEEF-CAFEBABE-00000001  →  Brand1"
+          say "    00000002-FFFFFFFF-DEADBEEF-CAFEBABE-00000002  →  Brand2"
+          say "    00000003-FFFFFFFF-DEADBEEF-CAFEBABE-00000003  →  Brand3"
+          say ""
+          say "  To reset: rm ~/.clacky/brand.yml", :cyan
+          say ""
+        end
+
+        extra_flags = []
+        extra_flags << "--strict-port" if options[:strict_port]
+        extra_flags << "--brand-test" if options[:brand_test]
+        extra_flags << "--no-compression" if options[:no_compression]
+        extra_flags << "--no-memory" if options[:no_memory]
+        extra_flags << "--no-caching" if options[:no_caching]
+        extra_flags << "--no-skill-evolution" if options[:no_skill_evolution]
+
+        # Echo logs to the terminal only when there is one. Under a LaunchAgent
+        # stderr has no terminal, so redirect it to the daily log file instead —
+        # uncaught exceptions print to $stderr, and this captures Master's own
+        # crash output (e.g. config/brand load failures) instead of losing it.
+        Clacky::Logger.console = $stderr.isatty
+        unless $stderr.isatty
+          Clacky::Logger.ensure_log_dir
+          log_io = File.open(Clacky::Logger.current_log_file, "a")
+          $stderr.reopen(log_io)
+          log_io.close
+        end
+
+        # ── Telemetry (anonymous, opt-out via CLACKY_TELEMETRY=0) ──────────
+        Clacky::Telemetry.startup!
+
+        Clacky::Server::Master.new(
+          host:        options[:host],
+          port:        options[:port],
+          strict_port: options[:strict_port],
+          extra_flags: extra_flags
+        ).run
+      end
+    end
+  end
+end

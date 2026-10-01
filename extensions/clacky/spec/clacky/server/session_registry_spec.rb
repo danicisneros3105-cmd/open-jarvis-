@@ -1,0 +1,408 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+require "tmpdir"
+require "json"
+require "time"
+
+require "clacky/session_manager"
+require "clacky/agent_config"
+require "clacky/server/session_registry"
+
+RSpec.describe Clacky::Server::SessionRegistry do
+  let(:default_config) { Clacky::AgentConfig.new }
+
+  def write_session_file(dir, session_id:, name:, created_at:, pinned: false,
+                         source: "manual", project_id: nil)
+    data = {
+      session_id:    session_id,
+      name:          name,
+      created_at:    created_at,
+      updated_at:    created_at,
+      working_dir:   "/tmp",
+      source:        source,
+      project_id:    project_id,
+      agent_profile: "general",
+      pinned:        pinned,
+      messages:      [],
+      stats:         { total_tasks: 0, total_cost_usd: 0.0 },
+    }
+    datetime = Time.parse(created_at).strftime("%Y-%m-%d-%H-%M-%S")
+    short_id = session_id[0..7]
+    File.write(File.join(dir, "#{datetime}-#{short_id}.json"),
+               JSON.pretty_generate(data))
+  end
+
+  describe "#snapshot" do
+    it "returns a row with the same shape as #list for the given session" do
+      Dir.mktmpdir("clacky_snapshot_spec") do |dir|
+        write_session_file(dir, session_id: "sess_abcdef01", name: "my-session",
+                           created_at: "2026-04-01T00:00:00+00:00")
+        write_session_file(dir, session_id: "sess_ffffffff", name: "other",
+                           created_at: "2026-04-02T00:00:00+00:00")
+
+        manager  = Clacky::SessionManager.new(sessions_dir: dir)
+        registry = described_class.new(session_manager: manager, agent_config: default_config)
+
+        from_list     = registry.list.find { |s| s[:id] == "sess_abcdef01" }
+        from_snapshot = registry.snapshot("sess_abcdef01")
+
+        expect(from_snapshot).not_to be_nil
+        expect(from_snapshot.keys.sort).to eq(from_list.keys.sort)
+        expect(from_snapshot).to eq(from_list)
+      end
+    end
+
+    it "returns nil for an unknown session id" do
+      Dir.mktmpdir("clacky_snapshot_spec") do |dir|
+        manager  = Clacky::SessionManager.new(sessions_dir: dir)
+        registry = described_class.new(session_manager: manager, agent_config: default_config)
+        expect(registry.snapshot("does_not_exist")).to be_nil
+      end
+    end
+
+    it "marks offline sessions as 'idle' (no live agent => string status)" do
+      Dir.mktmpdir("clacky_snapshot_spec") do |dir|
+        write_session_file(dir, session_id: "sess_offline", name: "off",
+                           created_at: "2026-04-01T00:00:00+00:00")
+
+        manager  = Clacky::SessionManager.new(sessions_dir: dir)
+        registry = described_class.new(session_manager: manager, agent_config: default_config)
+
+        snap = registry.snapshot("sess_offline")
+        expect(snap[:status]).to eq("idle")
+        expect(snap[:error]).to be_nil
+        expect(snap[:total_tasks]).to be_a(Integer)
+        expect(snap[:total_cost]).to be_a(Numeric)
+        expect(snap[:cost_source]).to be_a(String)
+      end
+    end
+  end
+
+  describe "grouped sources" do
+    def registry_with_groups(dir)
+      write_session_file(dir, session_id: "sess_manual01", name: "manual",
+                         created_at: "2026-04-01T00:00:00+00:00")
+      write_session_file(dir, session_id: "sess_ext00001", name: "ext one", source: "ext",
+                         created_at: "2026-04-02T00:00:00+00:00")
+      write_session_file(dir, session_id: "sess_ext00002", name: "ext two", source: "ext",
+                         created_at: "2026-04-03T00:00:00+00:00")
+      write_session_file(dir, session_id: "sess_extproj1", name: "ext in project", source: "ext",
+                         project_id: "proj_1", created_at: "2026-04-04T00:00:00+00:00")
+      write_session_file(dir, session_id: "sess_cron0001", name: "cron one", source: "cron",
+                         created_at: "2026-04-05T00:00:00+00:00")
+
+      manager = Clacky::SessionManager.new(sessions_dir: dir)
+      described_class.new(session_manager: manager, agent_config: default_config)
+    end
+
+    it "excludes grouped sources from the main list via exclude_type" do
+      Dir.mktmpdir("clacky_groups_spec") do |dir|
+        registry = registry_with_groups(dir)
+
+        ids = registry.list(exclude_type: Clacky::SessionManager::GROUPED_SOURCES).map { |s| s[:id] }
+
+        expect(ids).to contain_exactly("sess_manual01")
+      end
+    end
+
+    it "counts only project-less sessions in #group_stats" do
+      Dir.mktmpdir("clacky_groups_spec") do |dir|
+        registry = registry_with_groups(dir)
+
+        stats = registry.group_stats("ext")
+
+        # sess_extproj1 belongs to a project, so it shows in the project section
+        # rather than the folded ext group.
+        expect(stats[:count]).to eq(2)
+        expect(stats[:latest_updated_at]).to eq("2026-04-03T00:00:00+00:00")
+      end
+    end
+
+    it "returns stats for every grouped source in #group_stats_all" do
+      Dir.mktmpdir("clacky_groups_spec") do |dir|
+        registry = registry_with_groups(dir)
+
+        all = registry.group_stats_all
+
+        expect(all.keys).to eq(Clacky::SessionManager::GROUPED_SOURCES)
+        expect(all["ext"][:count]).to eq(2)
+        expect(all["cron"][:count]).to eq(1)
+      end
+    end
+
+    it "still lists a grouped-source session when filtering by its project" do
+      Dir.mktmpdir("clacky_groups_spec") do |dir|
+        registry = registry_with_groups(dir)
+
+        ids = registry.list(project_id: "proj_1").map { |s| s[:id] }
+
+        # A project's session list must never hide ext/cron sessions, otherwise
+        # they'd vanish from the UI entirely: exclude_type keeps them out of the
+        # flat list and the folded group skips project-scoped ones.
+        expect(ids).to contain_exactly("sess_extproj1")
+      end
+    end
+  end
+
+  describe "#count_by_status" do
+    it "counts sessions with the given status" do
+      registry = described_class.new(agent_config: default_config)
+      registry.create(session_id: "s1")
+      registry.create(session_id: "s2")
+      registry.update("s1", status: :running)
+
+      expect(registry.count_by_status(:running)).to eq(1)
+      expect(registry.count_by_status(:idle)).to eq(1)
+    end
+  end
+
+  describe "#running_full?" do
+    it "returns true when running count reaches default limit" do
+      registry = described_class.new(agent_config: default_config)
+
+      default_config.max_running_agents.times do |i|
+        registry.create(session_id: "r#{i}")
+        registry.update("r#{i}", status: :running)
+      end
+
+      expect(registry.running_full?).to be true
+    end
+
+    it "returns false when under the limit" do
+      registry = described_class.new(agent_config: default_config)
+      registry.create(session_id: "r0")
+      registry.update("r0", status: :running)
+
+      expect(registry.running_full?).to be false
+    end
+
+    it "respects agent_config max_running_agents" do
+      config = Clacky::AgentConfig.new(max_running_agents: 2)
+      registry = described_class.new(agent_config: config)
+
+      2.times do |i|
+        registry.create(session_id: "r#{i}")
+        registry.update("r#{i}", status: :running)
+      end
+
+      expect(registry.running_full?).to be true
+    end
+  end
+
+  describe "#evict_excess_idle!" do
+    it "evicts oldest idle agents when exceeding default limit" do
+      Dir.mktmpdir("clacky_evict_spec") do |dir|
+        manager  = Clacky::SessionManager.new(sessions_dir: dir)
+        registry = described_class.new(session_manager: manager, agent_config: default_config)
+
+        agent_double = double("agent", to_session_data: {
+          session_id: "x", messages: [], created_at: Time.now.iso8601
+        })
+
+        total = default_config.max_idle_agents + 3
+        ids = total.times.map { |i| "evict_#{i}" }
+
+        ids.each_with_index do |id, i|
+          registry.create(session_id: id)
+          registry.with_session(id) { |s| s[:agent] = agent_double }
+          registry.update(id, status: :idle, updated_at: Time.now - (total - i))
+        end
+
+        expect(registry.count_by_status(:idle)).to eq(total)
+
+        registry.evict_excess_idle!
+
+        expect(registry.count_by_status(:idle)).to eq(default_config.max_idle_agents)
+
+        ids.first(3).each do |id|
+          expect(registry.exist?(id)).to be false
+        end
+        ids.last(default_config.max_idle_agents).each do |id|
+          expect(registry.exist?(id)).to be true
+        end
+      end
+    end
+
+    it "respects agent_config max_idle_agents" do
+      Dir.mktmpdir("clacky_evict_spec") do |dir|
+        config = Clacky::AgentConfig.new(max_idle_agents: 2)
+        manager  = Clacky::SessionManager.new(sessions_dir: dir)
+        registry = described_class.new(session_manager: manager, agent_config: config)
+
+        agent_double = double("agent", to_session_data: {
+          session_id: "x", messages: [], created_at: Time.now.iso8601
+        })
+
+        4.times do |i|
+          registry.create(session_id: "evict_#{i}")
+          registry.with_session("evict_#{i}") { |s| s[:agent] = agent_double }
+          registry.update("evict_#{i}", status: :idle, updated_at: Time.now - (4 - i))
+        end
+
+        registry.evict_excess_idle!
+        expect(registry.count_by_status(:idle)).to eq(2)
+      end
+    end
+
+    it "does not evict running agents" do
+      registry = described_class.new(agent_config: default_config)
+      agent_double = double("agent")
+
+      (default_config.max_idle_agents + 2).times do |i|
+        registry.create(session_id: "s#{i}")
+        registry.with_session("s#{i}") { |s| s[:agent] = agent_double }
+        registry.update("s#{i}", status: :running)
+      end
+
+      registry.evict_excess_idle!
+
+      (default_config.max_idle_agents + 2).times do |i|
+        expect(registry.exist?("s#{i}")).to be true
+      end
+    end
+
+    it "reclaims awaiting_feedback agents so an unanswered question cannot pin memory" do
+      Dir.mktmpdir("clacky_evict_spec") do |dir|
+        config   = Clacky::AgentConfig.new(max_idle_agents: 1)
+        manager  = Clacky::SessionManager.new(sessions_dir: dir)
+        registry = described_class.new(session_manager: manager, agent_config: config)
+
+        agent_double = double("agent", to_session_data: {
+          session_id: "x", messages: [], created_at: Time.now.iso8601
+        })
+
+        3.times do |i|
+          id = "await_#{i}"
+          registry.create(session_id: id)
+          registry.with_session(id) { |s| s[:agent] = agent_double }
+          registry.update(id, status: :awaiting_feedback, updated_at: Time.now - (3 - i))
+        end
+
+        registry.evict_excess_idle!
+
+        expect(registry.count_by_status(:awaiting_feedback)).to eq(1)
+        expect(registry.exist?("await_0")).to be false
+        expect(registry.exist?("await_2")).to be true
+      end
+    end
+
+    it "does not count awaiting_feedback against the running concurrency limit" do
+      config   = Clacky::AgentConfig.new(max_running_agents: 1)
+      registry = described_class.new(agent_config: config)
+
+      registry.create(session_id: "waiting")
+      registry.update("waiting", status: :awaiting_feedback)
+
+      expect(registry.running_full?).to be false
+    end
+  end
+
+  describe "#each_live_agent" do
+    it "yields [id, agent, thread] only for sessions with an agent attached" do
+      registry = described_class.new(agent_config: default_config)
+      agent_a = double("agent_a")
+      thread_a = double("thread_a")
+      agent_b = double("agent_b")
+
+      registry.create(session_id: "with_agent_a")
+      registry.with_session("with_agent_a") { |s| s[:agent] = agent_a; s[:thread] = thread_a }
+
+      registry.create(session_id: "with_agent_b")
+      registry.with_session("with_agent_b") { |s| s[:agent] = agent_b }
+
+      registry.create(session_id: "no_agent")  # agent stays nil
+
+      seen = []
+      registry.each_live_agent { |id, agent, thread| seen << [id, agent, thread] }
+
+      expect(seen).to contain_exactly(
+        ["with_agent_a", agent_a, thread_a],
+        ["with_agent_b", agent_b, nil]
+      )
+    end
+
+    it "yields nothing when no sessions have agents" do
+      registry = described_class.new(agent_config: default_config)
+      registry.create(session_id: "empty")
+
+      seen = []
+      registry.each_live_agent { |id, agent, thread| seen << [id, agent, thread] }
+
+      expect(seen).to be_empty
+    end
+  end
+
+  describe "epoch fencing" do
+    let(:registry) { described_class.new(agent_config: default_config) }
+
+    it "starts at epoch 0 and bumps monotonically on claim" do
+      registry.create(session_id: "s1")
+      expect(registry.current_epoch("s1")).to eq(0)
+      expect(registry.claim_epoch("s1")).to eq(1)
+      expect(registry.claim_epoch("s1")).to eq(2)
+      expect(registry.current_epoch("s1")).to eq(2)
+    end
+
+    it "returns nil / 0 for unknown sessions" do
+      expect(registry.claim_epoch("missing")).to be_nil
+      expect(registry.current_epoch("missing")).to eq(0)
+    end
+
+    it "applies update_if_epoch only when the epoch still matches" do
+      registry.create(session_id: "s1")
+      epoch = registry.claim_epoch("s1")
+
+      expect(registry.update_if_epoch("s1", epoch, status: :idle)).to be(true)
+      expect(registry.get("s1")[:status]).to eq(:idle)
+    end
+
+    it "drops a stale update once a newer task has claimed the session" do
+      registry.create(session_id: "s1")
+      old_epoch = registry.claim_epoch("s1")
+      registry.update("s1", status: :running)
+
+      # A newer task takes over.
+      registry.claim_epoch("s1")
+
+      # The old task's late completion must not flip status back to :idle.
+      expect(registry.update_if_epoch("s1", old_epoch, status: :idle)).to be(false)
+      expect(registry.get("s1")[:status]).to eq(:running)
+    end
+  end
+
+  describe "#shutdown_all_idle_timers" do
+    it "shuts down every session's idle timer" do
+      Dir.mktmpdir("clacky_idle_shutdown") do |dir|
+        manager  = Clacky::SessionManager.new(sessions_dir: dir)
+        registry = described_class.new(session_manager: manager, agent_config: default_config)
+
+        timer1 = double("timer1")
+        timer2 = double("timer2")
+        expect(timer1).to receive(:shutdown)
+        expect(timer2).to receive(:shutdown)
+
+        sessions = registry.instance_variable_get(:@sessions)
+        sessions["s1"] = { idle_timer: timer1 }
+        sessions["s2"] = { idle_timer: timer2 }
+        sessions["s3"] = { idle_timer: nil }
+
+        expect { registry.shutdown_all_idle_timers }.not_to raise_error
+      end
+    end
+
+    it "does not raise when a timer's shutdown fails" do
+      Dir.mktmpdir("clacky_idle_shutdown") do |dir|
+        manager  = Clacky::SessionManager.new(sessions_dir: dir)
+        registry = described_class.new(session_manager: manager, agent_config: default_config)
+
+        timer = double("timer")
+        allow(timer).to receive(:shutdown).and_raise(StandardError, "boom")
+
+        registry.instance_variable_get(:@sessions)["s1"] = { idle_timer: timer }
+
+        expect { registry.shutdown_all_idle_timers }.not_to raise_error
+      end
+    end
+  end
+end

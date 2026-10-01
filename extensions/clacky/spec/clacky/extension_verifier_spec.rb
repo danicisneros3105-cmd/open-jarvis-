@@ -1,0 +1,343 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+
+RSpec.describe Clacky::ExtensionVerifier do
+  let(:builtin)   { Dir.mktmpdir }
+  let(:installed) { Dir.mktmpdir }
+  let(:local)     { Dir.mktmpdir }
+
+  after do
+    [builtin, installed, local].each { |d| FileUtils.remove_entry(d) if Dir.exist?(d) }
+    Clacky::ExtensionLoader.instance_variable_set(:@last_result, nil)
+  end
+
+  def make_ext(root, ext_id, manifest, files = {})
+    dir = File.join(root, ext_id)
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "ext.yml"), manifest)
+    files.each do |rel, content|
+      path = File.join(dir, rel)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, content)
+    end
+  end
+
+  def reload_layers
+    Clacky::ExtensionLoader.load_all(layers: { builtin: builtin, installed: installed, local: local })
+  end
+
+  it "flags unknown top-level keys in ext.yml" do
+    manifest = <<~YAML
+      id: bad-top-key
+      origin: self
+      randomKey: oops
+      contributes: {}
+    YAML
+    make_ext(local, "bad-top-key", manifest)
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    codes = issues.map(&:code)
+    expect(codes).to include("schema.unknown_key")
+    expect(issues.find { |i| i.code == "schema.unknown_key" }.level).to eq(:warning)
+  end
+
+  it "accepts the `config` top-level key without warning" do
+    manifest = <<~YAML
+      id: config-ok
+      origin: self
+      config:
+        foo: bar
+      contributes: {}
+    YAML
+    make_ext(local, "config-ok", manifest)
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    expect(issues.map(&:code)).not_to include("schema.unknown_key")
+  end
+
+  it "accepts a three-segment numeric version" do
+    manifest = <<~YAML
+      id: valid-version
+      version: 10.2.35
+      origin: self
+      contributes: {}
+    YAML
+    make_ext(local, "valid-version", manifest)
+
+    issues = described_class.verify(reload_layers)
+
+    expect(issues.map(&:code)).not_to include("schema.invalid_version")
+  end
+
+  it "flags a version that is not three numeric segments" do
+    manifest = <<~YAML
+      id: invalid-version
+      version: test.1.0
+      origin: self
+      contributes: {}
+    YAML
+    make_ext(local, "invalid-version", manifest)
+
+    issues = described_class.verify(reload_layers)
+    issue = issues.find { |candidate| candidate.code == "schema.invalid_version" }
+
+    expect(issue).not_to be_nil
+    expect(issue.level).to eq(:error)
+  end
+
+  it "keeps the version field optional during local development" do
+    manifest = <<~YAML
+      id: no-version
+      origin: self
+      contributes: {}
+    YAML
+    make_ext(local, "no-version", manifest)
+
+    issues = described_class.verify(reload_layers)
+
+    expect(issues.map(&:code)).not_to include("schema.invalid_version")
+  end
+
+  it "flags unknown contributes type" do
+    manifest = <<~YAML
+      id: bad-contrib
+      origin: self
+      contributes:
+        widgets: []
+    YAML
+    make_ext(local, "bad-contrib", manifest)
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    expect(issues.map(&:code)).to include("schema.unknown_contributes")
+  end
+
+  it "flags unknown unit-level fields" do
+    manifest = <<~YAML
+      id: typo-pack
+      origin: self
+      contributes:
+        panels:
+          - id: hello
+            title: Hello
+            attach: ["*"]
+            view: view.js
+            mistypedField: yes
+    YAML
+    make_ext(local, "typo-pack", manifest, "view.js" => "//")
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    field_issue = issues.find { |i| i.code == "schema.unknown_field" }
+    expect(field_issue).not_to be_nil
+    expect(field_issue.message).to include("mistypedField")
+  end
+
+  it "accepts the hidden field on agents without warning" do
+    manifest = <<~YAML
+      id: hidden-agent-pack
+      origin: self
+      contributes:
+        agents:
+          - id: secret
+            title: Secret
+            description: x
+            prompt: prompt.md
+            hidden: true
+    YAML
+    make_ext(local, "hidden-agent-pack", manifest, "prompt.md" => "hi")
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    unknown = issues.select { |i| i.code == "schema.unknown_field" && i.unit == "secret" }
+    expect(unknown).to be_empty
+  end
+
+  it "accepts disabled_skills on agents while still warning about misspelled fields" do
+    manifest = <<~YAML
+      id: filtered-agent-pack
+      origin: self
+      contributes:
+        agents:
+          - id: filtered
+            title: Filtered
+            prompt: prompt.md
+            disabled_skills: [triage]
+            disabled_skill: [typo]
+    YAML
+    make_ext(local, "filtered-agent-pack", manifest, "prompt.md" => "hi")
+
+    issues = described_class.verify(reload_layers)
+    unknown = issues.select { |i| i.code == "schema.unknown_field" && i.unit == "filtered" }
+    expect(unknown.size).to eq(1)
+    expect(unknown.first.message).to eq("agent unit has unknown key(s): disabled_skill")
+  end
+
+  it "flags an agent referencing a non-existent panel" do
+    manifest = <<~YAML
+      id: ghost-ref
+      origin: self
+      contributes:
+        agents:
+          - id: ghosty
+            title: Ghosty
+            description: x
+            prompt: prompt.md
+            panels: [does-not-exist]
+    YAML
+    make_ext(local, "ghost-ref", manifest, "prompt.md" => "hi")
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    miss = issues.find { |i| i.code == "ref.missing_panel" }
+    expect(miss).not_to be_nil
+    expect(miss.level).to eq(:error)
+  end
+
+  it "passes when an agent references a panel actually contributed by the same container" do
+    manifest = <<~YAML
+      id: linked
+      origin: self
+      contributes:
+        panels:
+          - id: dash
+            title: Dash
+            view: view.js
+        agents:
+          - id: designer
+            title: D
+            description: d
+            prompt: prompt.md
+            panels: [dash]
+    YAML
+    make_ext(local, "linked", manifest, "view.js" => "//", "prompt.md" => "x")
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    expect(issues.map(&:code)).not_to include("ref.missing_panel")
+  end
+
+  it "surfaces loader errors as issues" do
+    manifest = <<~YAML
+      id: missing-view
+      origin: self
+      contributes:
+        panels:
+          - id: hello
+            title: Hello
+            attach: ["*"]
+            view: nope.js
+    YAML
+    make_ext(local, "missing-view", manifest)
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    expect(issues.map(&:code)).to include("loader.error")
+  end
+
+  it "reports container override across layers as a warning" do
+    manifest_a = "id: dup\norigin: self\ncontributes: {}\n"
+    make_ext(installed, "dup", manifest_a)
+    make_ext(local,     "dup", manifest_a)
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    over = issues.find { |i| i.code == "override" }
+    expect(over).not_to be_nil
+    expect(over.level).to eq(:warning)
+  end
+
+  it "flags unknown fields on a tool unit" do
+    manifest = <<~YAML
+      id: typo-tool
+      origin: self
+      contributes:
+        tools:
+          - id: hello
+            file: tools/hello.rb
+            name: Hello
+    YAML
+    make_ext(local, "typo-tool", manifest, "tools/hello.rb" => "class Clacky::Tools::Hello < Clacky::Tools::Base; end")
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    field_issue = issues.find { |i| i.code == "schema.unknown_field" && i.unit == "hello" }
+    expect(field_issue).not_to be_nil
+    expect(field_issue.message).to include("name")
+  end
+
+  it "accepts agent `tools:` opt-in references without warning" do
+    manifest = <<~YAML
+      id: tool-owner
+      origin: self
+      contributes:
+        tools:
+          - id: hello
+            file: tools/hello.rb
+        agents:
+          - id: designer
+            title: Designer
+            description: owns the tool
+            prompt: prompt.md
+            tools: [hello]
+    YAML
+    make_ext(local, "tool-owner", manifest,
+             "tools/hello.rb" => "class Clacky::Tools::Hello < Clacky::Tools::Base; end",
+             "prompt.md" => "hi")
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    unknown = issues.select { |i| i.code == "schema.unknown_field" }
+    expect(unknown).to be_empty
+  end
+
+  it "flags a malformed panel `attach` value" do
+    manifest = <<~YAML
+      id: bad-attach
+      origin: self
+      contributes:
+        panels:
+          - id: hello
+            view: view.js
+            attach: nope
+    YAML
+    make_ext(local, "bad-attach", manifest, "view.js" => "//")
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    bad = issues.find { |i| i.code == "schema.bad_attach" }
+    expect(bad).not_to be_nil
+    expect(bad.level).to eq(:error)
+  end
+
+  it "warns when panel.attach references a non-existent agent" do
+    manifest = <<~YAML
+      id: dangling-attach
+      origin: self
+      contributes:
+        panels:
+          - id: hello
+            view: view.js
+            attach: [nobody]
+    YAML
+    make_ext(local, "dangling-attach", manifest, "view.js" => "//")
+    result = reload_layers
+
+    issues = described_class.verify(result)
+    miss = issues.find { |i| i.code == "ref.missing_attach_agent" }
+    expect(miss).not_to be_nil
+    expect(miss.level).to eq(:warning)
+  end
+
+  it "reports no issues for the gem's own bundled default extensions" do
+    result = Clacky::ExtensionLoader.load_all(
+      layers: { builtin: Clacky::ExtensionLoader::BUILTIN_DIR }, force: true
+    )
+
+    issues = described_class.verify(result)
+    expect(issues).to be_empty, -> { issues.map { |i| "#{i.code} #{i.ext}: #{i.message}" }.join("\n") }
+  end
+end

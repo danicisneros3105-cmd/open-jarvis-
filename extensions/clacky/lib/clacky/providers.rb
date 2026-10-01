@@ -1,0 +1,1268 @@
+# frozen_string_literal: true
+
+module Clacky
+  # Built-in model provider presets
+  # Provides default configurations for supported AI model providers
+  module Providers
+    # Provider preset definitions
+    # Each preset includes:
+    # - name: Human-readable provider name
+    # - base_url: Default API endpoint
+    # - api: API type (anthropic-messages, openai-responses, openai-completions)
+    # - default_model: Recommended default model
+    # - capabilities (optional): provider-level capability hash (e.g.
+    #   { "vision" => false }). Applies to all models under this provider
+    #   unless overridden by model_capabilities below.
+    # - model_capabilities (optional): per-model capability override map,
+    #   { "<model_name>" => { "<cap>" => bool, ... } }. Use this when a
+    #   single provider hosts models with different capabilities (e.g.
+    #   openclacky hosts both vision-capable Claude and text-only DeepSeek).
+    # - model_api_overrides (optional): per-model API-type override map,
+    #   { <Regexp|String> => "anthropic-messages" | "openai-completions" | ... }.
+    #   Keys can be a plain model name or a Regexp matched against the model.
+    #   The first key that matches wins; if none match, the provider's top-level
+    #   "api" is used. Used so e.g. OpenRouter can keep "openai-responses" as
+    #   its default while routing Claude models through the native Anthropic
+    #   endpoint (which preserves cache_control fidelity).
+    PRESETS = {
+      "openclacky" => {
+        "name" => "OpenClacky",
+        "base_url" => "https://api.openclacky.com",
+        "api" => "bedrock",
+        # "auto" is a gateway-side virtual alias: the platform routes each
+        # call economy-first (DeepSeek Flash floor, Gemini Pro upgrade on
+        # long/complex requests) and reports the concrete model back via the
+        # X-Clacky-Routed-Model response header.
+        "default_model" => "auto",
+        "models" => [
+          "auto",
+          "abs-gpt-6-astra",
+          "abs-gpt-6-sol",
+          "abs-gpt-6-luna",
+          "abs-gpt-5.6-sol",
+          "abs-gpt-5.6-terra",
+          "abs-gpt-5.6-luna",
+          "abs-claude-fable-5-1",
+          "abs-claude-fable-5",
+          "abs-claude-opus-5-5",
+          "abs-claude-opus-5",
+          "abs-claude-opus-4-8",
+          "abs-claude-opus-4-7",
+          "abs-claude-sonnet-5",
+          "abs-claude-sonnet-4-6",
+          "abs-claude-haiku-4-5",
+          "dsk-deepseek-flash",
+          "dsk-deepseek-v4-pro",
+          "or-gemini-3-1-pro",
+          "or-gemini-3-8-flash",
+          "or-gemini-3-7-flash"
+        ],
+        # Image generation models served by the openclacky platform
+        # gateway. The gateway exposes a standard OpenAI-compatible
+        # /v1/images/generations endpoint, so the same OpenAICompat
+        # provider class handles them. `or-` prefix is a routing alias
+        # only — the platform may dispatch to OpenRouter or Vertex AI
+        # (Gemini Nano Banana family) depending on the model.
+        "image_models" => [
+          "or-gemini-3-pro-image",
+          "or-gemini-3-1-flash-image",
+          "or-gpt-image-2"
+        ],
+        "image_model_aliases" => {
+          "or-gemini-3-pro-image"      => "Nano Banana Pro",
+          "or-gemini-3-1-flash-image"  => "Nano Banana 2",
+          "or-gpt-image-2"             => "GPT Image 2"
+        },
+        "default_image_model" => "or-gemini-3-1-flash-image",
+        # Video generation models served by the openclacky gateway, which
+        # routes them to Vertex AI Veo (async predictLongRunning under the
+        # hood; the gateway hides the polling and returns the MP4 inline).
+        "video_models" => [
+          "or-veo-3-1",
+          "or-veo-3-1-fast",
+          "or-veo-3",
+          "or-veo-3-fast"
+        ],
+        "video_model_aliases" => {
+          "or-veo-3-1"      => "Veo 3.1",
+          "or-veo-3-1-fast" => "Veo 3.1 Fast",
+          "or-veo-3"        => "Veo 3",
+          "or-veo-3-fast"   => "Veo 3 Fast"
+        },
+        "default_video_model" => "or-veo-3-1",
+        # Text-to-speech models served by the openclacky gateway, which
+        # routes them to Vertex AI Gemini 2.5 (responseModalities=["AUDIO"]).
+        # The gateway returns WAV inline as base64.
+        "audio_models" => [
+          "or-tts-gemini-2-5-flash",
+          "or-tts-gemini-2-5-pro"
+        ],
+        "audio_model_aliases" => {
+          "or-tts-gemini-2-5-flash" => "Gemini 2.5 Flash TTS",
+          "or-tts-gemini-2-5-pro"   => "Gemini 2.5 Pro TTS"
+        },
+        "default_audio_model" => "or-tts-gemini-2-5-flash",
+        # Speech-to-text models served by the openclacky gateway, which
+        # routes them to Vertex AI Gemini (generateContent with inline
+        # audio parts). The gateway returns transcription text.
+        "stt_models" => [
+          "or-stt-gemini-3-8-flash",
+          "or-stt-gemini-3-7-flash",
+          "or-stt-gemini-1-5-pro"
+        ],
+        "stt_model_aliases" => {
+          "or-stt-gemini-3-8-flash" => "Gemini 3.8 Flash STT",
+          "or-stt-gemini-3-7-flash" => "Gemini 3.7 Flash STT",
+          "or-stt-gemini-1-5-pro"   => "Gemini 1.5 Pro STT"
+        },
+        "default_stt_model" => "or-stt-gemini-3-8-flash",
+        # Video understanding models served by the openclacky gateway, which
+        # routes video frames to Gemini (generateContent with inline image
+        # parts). The gateway returns analysis text.
+        "video_understanding_models" => [
+          "or-gemini-3-8-flash",
+          "or-gemini-3-7-flash",
+          "or-gemini-3-1-pro"
+        ],
+        "video_understanding_model_aliases" => {
+          "or-gemini-3-8-flash" => "Gemini 3.8 Flash",
+          "or-gemini-3-7-flash" => "Gemini 3.7 Flash",
+          "or-gemini-3-1-pro"   => "Gemini 3.1 Pro"
+        },
+        "default_video_understanding_model" => "or-gemini-3-8-flash",
+        # Default OCR sidecar — used when the primary model is text-only.
+        # Candidates are derived from the provider's vision-capable models;
+        # this just picks the cheap+fast default to surface in "auto" mode.
+        "default_ocr_model" => "or-gemini-3-8-flash",
+        # Provider-level default: the Claude family served here is vision-capable.
+        "capabilities" => { "vision" => true }.freeze,
+        # Model-level overrides: DeepSeek models routed through this provider
+        # are text-only except V4.1 Flash, which is natively multimodal;
+        # images uploaded for text-only models must be downgraded to disk
+        # refs. Gemini 3.1 Pro keeps the provider-default vision=true
+        # (it accepts image/audio/video input natively via OpenRouter).
+        "model_capabilities" => {
+          "dsk-deepseek-flash"  => { "vision" => true }.freeze,
+          "dsk-deepseek-v4-pro" => { "vision" => false }.freeze
+        }.freeze,
+        # Bedrock GPT models (abs-gpt-*) are served through the OpenAI
+        # Responses API — their Chat Completions endpoint rejects function
+        # tools for reasoning models (GPT-6 Astra).
+        "model_api_overrides" => {
+          "auto"      => "openai-completions",
+          /\Aabs-gpt-/ => "openai-responses"
+        }.freeze,
+        # Per-primary lite pairing: keys are "strong" primary models, values
+        # are the lite sidekick to auto-inject when that primary is the
+        # default. Lite is consumed by some subagents for cheap/fast work;
+        # weak models (haiku / flash / 3-5-flash) ARE the lite tier
+        # themselves, so they're intentionally not listed here as keys —
+        # no injection happens when the default model is already lite-class.
+        "lite_models" => {
+          "auto"                 => "dsk-deepseek-flash",
+          "abs-claude-fable-5-1"  => "abs-claude-haiku-4-5",
+          "abs-claude-fable-5"    => "abs-claude-haiku-4-5",
+          "abs-claude-opus-5-5"   => "abs-claude-haiku-4-5",
+          "abs-claude-opus-5"     => "abs-claude-haiku-4-5",
+          "abs-claude-opus-4-8"   => "abs-claude-haiku-4-5",
+          "abs-claude-opus-4-7"   => "abs-claude-haiku-4-5",
+          "abs-claude-sonnet-5"   => "abs-claude-haiku-4-5",
+          "abs-claude-sonnet-4-6" => "abs-claude-haiku-4-5",
+          "abs-gpt-6-astra"       => "abs-gpt-6-luna",
+          "abs-gpt-6-sol"         => "abs-gpt-6-luna",
+          "abs-gpt-5.6-sol"       => "abs-gpt-5.6-luna",
+          "abs-gpt-5.6-terra"     => "abs-gpt-5.6-luna",
+          "dsk-deepseek-v4-pro"   => "dsk-deepseek-flash",
+          "or-gemini-3-1-pro"     => "or-gemini-3-8-flash"
+        },
+        # Fallback chain: if a model is unavailable, try the next one in order.
+        # Keys are primary model names; values are the fallback model to use instead.
+        "fallback_models" => {
+          "abs-claude-fable-5-1"  => "abs-claude-fable-5",
+          "abs-claude-fable-5"    => "abs-claude-opus-5",
+          "abs-claude-opus-5-5"   => "abs-claude-opus-5",
+          "abs-claude-opus-5"     => "abs-claude-opus-4-8",
+          "abs-claude-sonnet-5"   => "abs-claude-sonnet-4-6"
+        },
+        # Selectable endpoints exposed in the Base URL dropdown. The gateway
+        # currently has a single global endpoint, but the array shape is kept
+        # so the dropdown keeps working and regional endpoints can be added later.
+        "endpoint_variants" => [
+          { "label" => "Primary (Global)",  "label_key" => "settings.models.baseurl.variant.openclacky_primary",   "base_url" => "https://api.openclacky.com" }.freeze
+        ].freeze,
+        "website_url" => "https://www.openclacky.com/ai-keys"
+      }.freeze,
+
+
+      "deepseekv4" => {
+        "name" => "DeepSeek",
+        # DeepSeek API is compatible with both OpenAI and Anthropic formats.
+        # We use the OpenAI-compatible endpoint here (matches kimi/minimax/glm style).
+        # For Anthropic-format usage, point base_url at https://api.deepseek.com/anthropic
+        # and change "api" to "anthropic-messages".
+        "base_url" => "https://api.deepseek.com",
+        "api" => "openai-completions",
+        "default_model" => "deepseek-v4-pro",
+        "lite_model" => "deepseek-flash",
+        # Note: deepseek-chat and deepseek-reasoner are legacy aliases being
+        # deprecated on 2026-07-24; they map to V4.1 Flash's non-thinking and
+        # thinking modes respectively.
+        # deepseek-v4-flash / deepseek-v4-flash-vision-exp are retired and no
+        # longer offered upstream, so they are out of this list: only their
+        # pricing entries remain, to let already-billed history resolve.
+        "models" => [
+          "deepseek-flash",
+          "deepseek-v4-pro",
+        ],
+        # DeepSeek V4 API is text-only across all models, except V4.1 Flash
+        # (deepseek-flash), which is natively multimodal.
+        "capabilities" => { "vision" => false }.freeze,
+        "model_capabilities" => {
+          "deepseek-flash" => { "vision" => true }.freeze
+        }.freeze,
+        "website_url" => "https://platform.deepseek.com/api_keys"
+      }.freeze,
+
+      "glm" => {
+        "name" => "GLM (Z.ai / Zhipu)",
+        "base_url" => "https://open.bigmodel.cn/api/paas/v4",
+        "api" => "openai-completions",
+        "default_model" => "glm-5.3",
+        "models" => ["glm-5.3", "glm-5.3-flashx", "glm-5.3-flash", "glm-5.2"],
+        # Zhipu / Z.ai expose four functionally-equivalent endpoints:
+        # two regional sites (mainland open.bigmodel.cn + international api.z.ai)
+        # each with a general-billing and a Coding-Plan subpath. They share the
+        # same model lineup & identical capability profile, so a single preset
+        # with endpoint_variants is the right shape — one source of truth for
+        # vision/model_capabilities, four URLs recognised by find_by_base_url.
+        # Without this, users pointing at api.z.ai or the /coding/ path fell
+        # through to the conservative "assume vision=true" default and got
+        # hallucinated image descriptions on text-only GLM models (C-5563).
+        "endpoint_variants" => [
+          { "label" => "Mainland · Pay-as-you-go",      "label_key" => "settings.models.baseurl.variant.mainland_cn_payg",    "base_url" => "https://open.bigmodel.cn/api/paas/v4",        "region" => "cn"   }.freeze,
+          { "label" => "Mainland · Coding Plan",        "label_key" => "settings.models.baseurl.variant.mainland_cn_coding",  "base_url" => "https://open.bigmodel.cn/api/coding/paas/v4", "region" => "cn"   }.freeze,
+          { "label" => "International · Pay-as-you-go", "label_key" => "settings.models.baseurl.variant.international_payg",  "base_url" => "https://api.z.ai/api/paas/v4",                "region" => "intl" }.freeze,
+          { "label" => "International · Coding Plan",   "label_key" => "settings.models.baseurl.variant.international_coding","base_url" => "https://api.z.ai/api/coding/paas/v4",         "region" => "intl" }.freeze
+        ].freeze,
+        # GLM models are text-only except the vision-capable SKUs: glm-5v-turbo
+        # (legacy), glm-5.3-flash, and glm-5.3-flashx.
+        "capabilities" => { "vision" => false }.freeze,
+        "model_capabilities" => {
+          "glm-5v-turbo" => { "vision" => true }.freeze,
+          "glm-5.3-flash" => { "vision" => true }.freeze,
+          "glm-5.3-flashx" => { "vision" => true }.freeze
+        }.freeze,
+        "default_ocr_model" => "glm-5.3-flash",
+        "website_url" => "https://open.bigmodel.cn/console/overview"
+      }.freeze,
+
+      "kimi" => {
+        "name" => "Kimi (Moonshot)",
+        "base_url" => "https://api.moonshot.cn/v1",
+        "api" => "openai-completions",
+        "default_model" => "kimi-k3",
+        "models" => ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"],
+        # Moonshot operates two regional endpoints with identical APIs & model
+        # lineup — mainland China (.cn) and international (.ai). These are the
+        # pay-as-you-go Open Platform endpoints; the subscription-billed
+        # Coding Plan lives at api.kimi.com/coding with the unified
+        # `kimi-for-coding` model alias and is exposed as a separate
+        # top-level "kimi-coding" preset (different domain, distinct billing
+        # model, marketed by Moonshot as the standalone Kimi Code product).
+        # Listing both PAYG variants here lets find_by_base_url identify
+        # either one as provider "kimi", so downstream capability checks,
+        # fallback chains, and provider-specific behaviours work regardless
+        # of which endpoint the user configured.
+        "endpoint_variants" => [
+          { "label" => "Mainland China", "label_key" => "settings.models.baseurl.variant.mainland_cn",   "base_url" => "https://api.moonshot.cn/v1", "region" => "cn"   }.freeze,
+          { "label" => "International",  "label_key" => "settings.models.baseurl.variant.international", "base_url" => "https://api.moonshot.ai/v1", "region" => "intl" }.freeze
+        ].freeze,
+        # k3 / k2.7-code / k2.6 are multimodal; legacy k2 text-only models need model_capabilities override if added.
+        "capabilities" => { "vision" => true }.freeze,
+        "default_ocr_model" => "kimi-k3",
+        "website_url" => "https://platform.moonshot.cn/console/api-keys"
+      }.freeze,
+
+      "kimi-coding" => {
+        "name" => "Kimi Code (Coding Plan)",
+        # Subscription-billed Kimi Code endpoint — separate product from the
+        # PAYG Moonshot Open Platform (api.moonshot.cn/v1 / .ai/v1). Uses the
+        # unified `kimi-for-coding` model alias which the Coding Plan backend
+        # routes to the appropriate K2 variant (Kimi-k2.6 today; 262K context,
+        # 32K max output, supports vision/video/reasoning).
+        #
+        # Why anthropic-messages: Moonshot exposes the Coding Plan via two
+        # URLs on the same domain — an Anthropic-format endpoint at
+        # api.kimi.com/coding/ (used by Claude Code via ANTHROPIC_BASE_URL)
+        # and an OpenAI-compatible endpoint at api.kimi.com/coding/v1 (used
+        # by Roo Code etc.). We route through anthropic-messages so
+        # cache_control fields round-trip byte-for-byte (the OpenAI shim is
+        # lossy for cache_control semantics — see OpenRouter preset below
+        # for the same reason). Verified against the live endpoint: response
+        # payload includes cache_creation_input_tokens / cache_read_input_tokens,
+        # so the cache layer is real on this backend.
+        #
+        # User-Agent gate: this endpoint enforces a UA-prefix whitelist
+        # limited to first-party coding agents (Kimi CLI, Claude Code, Roo
+        # Code, Kilo Code, ...). Requests carrying openclacky's default
+        # Faraday UA are rejected with HTTP 403 access_terminated_error.
+        # Client#anthropic_connection injects a Claude Code-shaped UA when
+        # @provider_id == "kimi-coding" — see the comment in client.rb for
+        # the policy rationale.
+        #
+        # Source: https://www.kimi.com/code/docs/third-party-tools/other-coding-agents.html
+        "base_url" => "https://api.kimi.com/coding",
+        "api" => "anthropic-messages",
+        "default_model" => "kimi-for-coding",
+        "models" => ["kimi-for-coding"],
+        # K2.6 backend behind the alias is multimodal (image + video input,
+        # reasoning). Same vision capability as the PAYG kimi preset.
+        "capabilities" => { "vision" => true }.freeze,
+        "website_url" => "https://www.kimi.com/code"
+      }.freeze,
+
+      "minimax" => {
+        "name" => "Minimax",
+        "base_url" => "https://api.minimaxi.com/v1",
+        "api" => "openai-completions",
+        "default_model" => "MiniMax-M3",
+        "models" => ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
+        # MiniMax operates two regional endpoints with identical APIs & model
+        # lineup — mainland China (.com) and international (.io). Listing both
+        # lets find_by_base_url identify either one as provider "minimax",
+        # so capability checks (vision=false) fire correctly regardless of
+        # which endpoint the user configured.
+        "endpoint_variants" => [
+          { "label" => "Mainland China", "label_key" => "settings.models.baseurl.variant.mainland_cn",   "base_url" => "https://api.minimaxi.com/v1", "region" => "cn"   }.freeze,
+          { "label" => "International",  "label_key" => "settings.models.baseurl.variant.international", "base_url" => "https://api.minimax.io/v1",   "region" => "intl" }.freeze
+        ].freeze,
+        # MiniMax M2.5/M2.7 are text-only on this endpoint. M3 (released 2026-06-01)
+        # is natively multimodal — it accepts image input via OpenAI-style
+        # image_url content parts — so it overrides the provider-level
+        # vision=false below. M3 exposes a 1,000,000-token context window
+        # (M2.7: 204,800; M2.5: 40,960).
+        "capabilities" => { "vision" => false }.freeze,
+        "model_capabilities" => {
+          "MiniMax-M3" => { "vision" => true }.freeze
+        }.freeze,
+        "default_ocr_model" => "MiniMax-M3",
+        "website_url" => "https://platform.minimax.io/"
+      }.freeze,
+
+      "openrouter" => {
+        "name" => "OpenRouter",
+        "base_url" => "https://openrouter.ai/api/v1",
+        "api" => "openai-responses",
+        "default_model" => "anthropic/claude-sonnet-4-6",
+        # Curated default lineup. OpenRouter's full catalogue is enormous
+        # (hundreds of models) and the live /models endpoint isn't always
+        # reachable from every region — shipping a small list of the
+        # mainstream Claude, GPT and Gemini entries gives users a working
+        # dropdown out of the box. Users can still type any other OpenRouter
+        # model ID manually; this list only seeds the picker.
+        "models" => [
+          "anthropic/claude-sonnet-4-6",
+          "anthropic/claude-opus-4-8",
+          "anthropic/claude-opus-4-7",
+          "anthropic/claude-opus-4-6",
+          "anthropic/claude-haiku-4-5",
+          "openai/gpt-5.6-sol",
+          "openai/gpt-5.6-terra",
+          "openai/gpt-5.6-luna",
+          "openai/gpt-5.5",
+          "openai/gpt-5.4",
+          "openai/gpt-5.4-mini",
+          # Listed because default_ocr_model only honours an explicit choice
+          # that is itself in the picker (see Providers.default_ocr_model).
+          "google/gemini-3.8-flash"
+        ],
+        # Per-primary lite pairing — Claude family pairs with Haiku, GPT
+        # family pairs with the mini variant. Mirrors the openclacky and
+        # openai presets above so subagents on OpenRouter get a sensible
+        # cheap/fast sidekick automatically.
+        "lite_models" => {
+          "anthropic/claude-sonnet-4-6" => "anthropic/claude-haiku-4-5",
+          "anthropic/claude-opus-4-8"   => "anthropic/claude-haiku-4-5",
+          "anthropic/claude-opus-4-7"   => "anthropic/claude-haiku-4-5",
+          "anthropic/claude-opus-4-6"   => "anthropic/claude-haiku-4-5",
+          "openai/gpt-5.6-sol"         => "openai/gpt-5.6-luna",
+          "openai/gpt-5.6-terra"       => "openai/gpt-5.6-luna",
+          "openai/gpt-5.5"              => "openai/gpt-5.4-mini",
+          "openai/gpt-5.4"              => "openai/gpt-5.4-mini"
+        },
+        # Per-model API type overrides. Matched by Regexp against the model name.
+        # Why this exists: OpenRouter proxies Claude via both its OpenAI-compatible
+        # /chat/completions endpoint AND a native Anthropic /v1/messages endpoint.
+        # The OpenAI shim is lossy for Claude's cache_control semantics — prefix
+        # rewrites inside the proxy cause ~10% prompt-cache misses. Pinning
+        # "anthropic/*" (and any direct "claude-*" alias) to the native Anthropic
+        # endpoint preserves cache_control byte-for-byte and matches what Claude
+        # Code CLI does internally. Non-Claude models (Gemini, GPT, etc.) keep
+        # the OpenAI shim — that's what OpenRouter documents as their primary.
+        "model_api_overrides" => {
+          /\Aanthropic\// => "anthropic-messages",
+          /\Aclaude[-.]/  => "anthropic-messages"
+        }.freeze,
+        # Image generation via OpenRouter is currently routed through the
+        # openclacky platform gateway (see "openclacky" provider above) which
+        # handles the OpenRouter chat-completions + modalities translation.
+        # Direct OpenRouter image config is not exposed here — leave empty
+        # until we ship a dedicated client-side adapter for that protocol.
+        "image_models" => [],
+        "default_image_model" => nil,
+        # Newest Gemini flash on OpenRouter that is still priced in our table;
+        # 2.5 Flash is cheaper upstream but has no entry, so its OCR usage
+        # would report no cost.
+        "default_ocr_model" => "google/gemini-3.8-flash",
+        "website_url" => "https://openrouter.ai/keys"
+      }.freeze,
+
+      "anthropic" => {
+        "name" => "Anthropic (Claude)",
+        "base_url" => "https://api.anthropic.com",
+        "api" => "anthropic-messages",
+        "default_model" => "claude-sonnet-4-6",
+        "models" => [
+          "claude-fable-5-1",
+          "claude-fable-5",
+          "claude-opus-5",
+          "claude-sonnet-5",
+          "claude-opus-4-8",
+          "claude-opus-4-7",
+          "claude-opus-4-6",
+          "claude-sonnet-4-6",
+          "claude-haiku-4-5"
+        ],
+        "default_ocr_model" => "claude-haiku-4-5",
+        "website_url" => "https://console.anthropic.com/settings/keys"
+      }.freeze,
+
+      "openai" => {
+        "name" => "OpenAI (GPT)",
+        "base_url" => "https://api.openai.com/v1",
+        "api" => "openai-completions",
+        "default_model" => "gpt-5.5",
+        "models" => [
+          "gpt-6-astra",
+          "gpt-5.6-sol",
+          "gpt-5.6-terra",
+          "gpt-5.6-luna",
+          "gpt-5.5",
+          "gpt-5.4",
+          "gpt-5.4-mini",
+          "gpt-5.4-nano",
+          "o4-mini",
+          "o3"
+        ],
+        # GPT-5.x and o-series models are multimodal (text + image input).
+        "capabilities" => { "vision" => true }.freeze,
+        # Per-primary lite pairing: subagents use mini/nano for cheap/fast work.
+        # o4-mini and o3 are reasoning models without a lite-tier sibling here.
+        # GPT-5.6 *-pro variants are priced identically to their base tier and
+        # can be typed manually; only the three base tiers are listed.
+        "lite_models" => {
+          "gpt-5.6-sol"   => "gpt-5.6-luna",
+          "gpt-5.6-terra" => "gpt-5.6-luna",
+          "gpt-5.5" => "gpt-5.4-mini",
+          "gpt-5.4" => "gpt-5.4-mini"
+        },
+        # OpenAI's image generation model — same /v1/images/generations
+        # endpoint, so the OpenAICompat image provider handles it.
+        "image_models" => [
+          "gpt-image-2"
+        ],
+        "default_image_model" => "gpt-image-2",
+        "default_ocr_model" => "gpt-5.4-mini",
+        "website_url" => "https://platform.openai.com/api-keys"
+      }.freeze,
+
+      "qwen" => {
+        "name" => "Qwen (Alibaba)",
+        "base_url" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "api" => "openai-completions",
+        "default_model" => "qwen3.8-max",
+        "models" => [
+          "qwen3.8-max",
+          "qwen3.7-max",
+          "qwen3.6-plus",
+          "qwen3.6-max",
+          "qwen3.6-27b",
+          "qwen3.6-flash",
+          "qwen-plus-latest",
+        ],
+        "endpoint_variants" => [
+          { "label" => "Mainland China",  "label_key" => "settings.models.baseurl.variant.mainland_cn",   "base_url" => "https://dashscope.aliyuncs.com/compatible-mode/v1",     "region" => "cn"   }.freeze,
+          { "label" => "Singapore",       "label_key" => "settings.models.baseurl.variant.international", "base_url" => "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "region" => "intl" }.freeze,
+          { "label" => "US (Virginia)",   "label_key" => "settings.models.baseurl.variant.us",            "base_url" => "https://dashscope-us.aliyuncs.com/compatible-mode/v1",   "region" => "us"   }.freeze
+        ].freeze,
+        "capabilities" => { "vision" => true }.freeze,
+        "model_capabilities" => {
+          "qwen3.7-max" => { "vision" => false }.freeze
+        }.freeze,
+        "default_ocr_model" => "qwen3.6-flash",
+        "lite_models" => {
+          "qwen3.8-max"      => "qwen3.6-flash",
+          "qwen3.7-max"      => "qwen3.6-flash",
+          "qwen3.6-plus"     => "qwen3.6-flash",
+          "qwen3.6-max"      => "qwen3.6-flash",
+          "qwen3.6-27b"      => "qwen3.6-flash",
+          "qwen-plus-latest" => "qwen3.6-flash"
+        },
+        "website_url" => "https://bailian.console.aliyun.com/?apiKey=1"
+      }.freeze,
+
+      "mimo" => {
+        "name" => "MiMo (Xiaomi)",
+        "base_url" => "https://api.xiaomimimo.com/v1",
+        "api" => "openai-completions",
+        "default_model" => "mimo-v2.5-pro",
+        # The MiMo-V2 family (mimo-v2-pro / mimo-v2-omni) was retired on
+        # 2026-06-30 and the model ids are no longer accepted by the API. The
+        # current lineup is the V2.5 series:
+        #   - mimo-v2.5-pro: text reasoning flagship, no vision
+        #   - mimo-v2.5: native omni-modal (image/video/audio/text), vision-capable
+        # Source: https://platform.xiaomimimo.com/docs/zh-CN/model
+        "models" => ["mimo-v2.5-pro", "mimo-v2.5"],
+        "capabilities" => { "vision" => false }.freeze,
+        "model_capabilities" => {
+          "mimo-v2.5" => { "vision" => true }.freeze
+        }.freeze,
+        "default_ocr_model" => "mimo-v2.5",
+        # Xiaomi serves the same V2.5 lineup from two billing endpoints: the
+        # pay-as-you-go API (api.xiaomimimo.com) and the Token Plan subscription
+        # endpoint (token-plan-cn.xiaomimimo.com). Both accept identical model
+        # ids and share one capability profile, so a single preset with
+        # endpoint_variants recognises both. Without this, users on the Token
+        # Plan endpoint fell through to "unknown provider" and the conservative
+        # vision=true default applied to every model — sending images to the
+        # text-only mimo-v2.5-pro, which rejects image input.
+        "endpoint_variants" => [
+          { "label" => "Pay-as-you-go", "label_key" => "settings.models.baseurl.variant.mimo_payg",        "base_url" => "https://api.xiaomimimo.com/v1",          "region" => "cn" }.freeze,
+          { "label" => "Token Plan",    "label_key" => "settings.models.baseurl.variant.mimo_token_plan", "base_url" => "https://token-plan-cn.xiaomimimo.com/v1", "region" => "cn" }.freeze
+        ].freeze,
+        "website_url" => "https://platform.xiaomimimo.com/"
+      }.freeze,
+
+      # Volcengine Ark (Doubao) — ByteDance's model platform, OpenAI-compatible.
+      # Exposes three functionally-equivalent endpoints (Pay-as-you-go / Coding
+      # Plan / Agent Plan) that share the same model lineup and capability
+      # profile, so a single preset with endpoint_variants is the right shape.
+      # Without a preset match, base_urls like /api/coding/v3 fell through to the
+      # conservative "assume vision=true" default and inlined images into
+      # text-only models (e.g. glm-5.2), which Ark rejects. The vision matrix
+      # below is the source of truth so text-only models route through the OCR
+      # sidecar instead.
+      "volcengine-ark" => {
+        "name" => "Volcengine Ark (Doubao)",
+        "name_key" => "provider.name.volcengine_ark",
+        "base_url" => "https://ark.cn-beijing.volces.com/api/v3",
+        "api" => "openai-completions",
+        "default_model" => "doubao-seed-2.1-pro",
+        "models" => [
+          "doubao-seed-evolving",
+          "doubao-seed-2.1-pro",
+          "doubao-seed-2.1-turbo",
+          "doubao-seed-2.0-mini",
+          "doubao-seed-2.0-lite",
+          "minimax-m3",
+          "kimi-k2.7-code",
+          "kimi-k3",
+          # GLM-5.2 is delisted from Ark on 2026-08-31, so new setups only
+          # offer GLM-5.3. It is available on the Coding/Agent Plan endpoints;
+          # the pay-as-you-go endpoint does not carry it yet (no versioned id),
+          # so no payg alias is registered for it.
+          "glm-5.3",
+          "glm-5.3-flash",
+          "deepseek-v4-pro",
+          "deepseek-v4-flash"
+        ],
+        "endpoint_variants" => [
+          { "label" => "Pay-as-you-go", "label_key" => "settings.models.baseurl.variant.ark_payg",   "base_url" => "https://ark.cn-beijing.volces.com/api/v3", "alias_group" => "payg" }.freeze,
+          { "label" => "Coding Plan",   "label_key" => "settings.models.baseurl.variant.ark_coding", "base_url" => "https://ark.cn-beijing.volces.com/api/coding/v3" }.freeze,
+          { "label" => "Agent Plan",    "label_key" => "settings.models.baseurl.variant.ark_agent",  "base_url" => "https://ark.cn-beijing.volces.com/api/plan/v3" }.freeze
+        ].freeze,
+        # Pay-as-you-go billing endpoint requires versioned model ids, while the
+        # Coding/Agent Plan endpoints accept the short display names. Users pick
+        # the intuitive short name; on the payg endpoint we transparently swap
+        # it for the versioned id the billing API expects. Only models whose ids
+        # actually differ are listed here.
+        "api_model_aliases" => {
+          "payg" => {
+            # glm-5.2 is delisted 2026-08-31 but existing configs must keep
+            # working until then, so the alias stays.
+            "glm-5.2"            => "glm-5-2-260617",
+            "deepseek-v4-pro"    => "deepseek-v4-pro-260425",
+            "deepseek-v4-flash"  => "deepseek-v4-flash-260425",
+            "doubao-seed-2.1-pro"   => "doubao-seed-2-1-pro-260628",
+            "doubao-seed-2.1-turbo" => "doubao-seed-2-1-turbo-260628",
+            "doubao-seed-2.0-mini"  => "doubao-seed-2-0-mini-260428",
+            "doubao-seed-2.0-lite"  => "doubao-seed-2-0-lite-260428"
+          }.freeze
+        }.freeze,
+        # Most Doubao/multimodal models accept image input; GLM-5.2/5.3 and
+        # DeepSeek-V4 on Ark are text-only. GLM-5.3-Flash inherits vision=true.
+        "capabilities" => { "vision" => true }.freeze,
+        "model_capabilities" => {
+          "glm-5.3"           => { "vision" => false }.freeze,
+          "glm-5.2"           => { "vision" => false }.freeze,
+          "deepseek-v4-pro"   => { "vision" => false }.freeze,
+          "deepseek-v4-flash" => { "vision" => false }.freeze,
+          "minimax-m2.7"      => { "vision" => false }.freeze
+        }.freeze,
+        "default_ocr_model" => "doubao-seed-2.0-lite",
+        "website_url" => "https://console.volcengine.com/ark/region:cn-beijing/overview"
+      }.freeze,
+
+      "ollama" => {
+        "name" => "Ollama (Cloud)",
+        # Ollama Cloud API — OpenAI-compatible endpoint serving both local and
+        # cloud models. Cloud models are available immediately without pulling.
+        # Authentication: API key via Authorization: Bearer <key> header.
+        # Create API keys at: https://ollama.com/settings/keys
+        "base_url" => "https://ollama.com",
+        "api" => "openai-completions",
+        "default_model" => "deepseek-v4-flash",
+        # Curated list of cloud-enabled models from the Ollama library.
+        # Users can type any Ollama model name manually; this list seeds the picker.
+        # Ollama's own subscription-billed open-weight models (gemma4, qwen3.5,
+        # nemotron-3-*, mistral-large-3, gpt-oss) publish no per-token price, so
+        # they are left out to keep every picker entry priced.
+        "models" => [
+          "glm-5.2",
+          "kimi-k3",
+          "glm-5.1",
+          "minimax-m2.7",
+          "minimax-m3",
+          "kimi-k2.7-code",
+          "kimi-k2.6",
+          "deepseek-v4-flash",
+          "deepseek-v4-pro",
+          "gemini-3-flash-preview"
+        ],
+        # Provider-level default: many Ollama cloud models are vision-capable.
+        "capabilities" => { "vision" => true }.freeze,
+        # Model-level overrides: text-only models that don't accept image input.
+        "model_capabilities" => {
+          "glm-5.2"             => { "vision" => false }.freeze,
+          "glm-5.1"             => { "vision" => false }.freeze,
+          "minimax-m2.7"        => { "vision" => false }.freeze,
+          "deepseek-v4-pro"     => { "vision" => false }.freeze,
+          "deepseek-v4-flash"   => { "vision" => false }.freeze
+        }.freeze,
+        # Per-primary lite pairing: subagents use smaller models for cheap/fast work.
+        "lite_models" => {
+          "glm-5.2"                => "glm-5.1",
+          "kimi-k3"                => "kimi-k2.6",
+          "minimax-m3"             => "minimax-m2.7",
+          "kimi-k2.7-code"         => "kimi-k2.6",
+          "deepseek-v4-pro"        => "deepseek-v4-flash",
+          "gemini-3-flash-preview" => "deepseek-v4-flash"
+        },
+        "default_ocr_model" => "kimi-k2.7-code",
+        "website_url" => "https://ollama.com/settings/keys"
+      }.freeze,
+
+      "orcarouter" => {
+        "name" => "OrcaRouter",
+        "base_url" => "https://api.orcarouter.ai/v1",
+        "api" => "openai-completions",
+        "default_model" => "openai/gpt-5.5",
+        # Curated default lineup. OrcaRouter exposes 190+ models from OpenAI,
+        # Anthropic, Google, DeepSeek, Qwen, MiniMax, Zhipu and others behind a
+        # single OpenAI-compatible endpoint. Shipping a small list of the
+        # mainstream Claude + GPT entries gives users a working dropdown out
+        # of the box; users can still type any other OrcaRouter model id manually.
+        "models" => [
+          "anthropic/claude-sonnet-5",
+          "anthropic/claude-opus-4.8",
+          "anthropic/claude-haiku-4.5",
+          "openai/gpt-5.5",
+          "openai/gpt-5.4",
+          "openai/gpt-5.4-mini",
+          "google/gemini-3.5-flash",
+          "deepseek/deepseek-v4-flash",
+          "z-ai/glm-5.2"
+        ],
+        # Per-primary lite pairing — Claude family pairs with Haiku, GPT
+        # family pairs with the mini variant. Mirrors the openrouter preset
+        # so subagents on OrcaRouter get a sensible cheap/fast sidekick.
+        "lite_models" => {
+          "anthropic/claude-sonnet-5" => "anthropic/claude-haiku-4.5",
+          "anthropic/claude-opus-4.8" => "anthropic/claude-haiku-4.5",
+          "openai/gpt-5.5"            => "openai/gpt-5.4-mini",
+          "openai/gpt-5.4"            => "openai/gpt-5.4-mini"
+        },
+        # Per-model API type overrides. OrcaRouter proxies Claude through a
+        # native Anthropic /v1/messages endpoint (https://api.orcarouter.ai/v1/messages)
+        # in addition to its OpenAI-compatible /chat/completions endpoint.
+        # Routing "anthropic/*" via the native endpoint preserves cache_control
+        # fidelity, matching what Claude Code CLI does internally (same rationale
+        # as the openrouter preset). Non-Claude models keep the OpenAI shim.
+        "model_api_overrides" => {
+          /\Aanthropic\// => "anthropic-messages"
+        }.freeze,
+        # Most models on OrcaRouter are vision-capable; DeepSeek and GLM-5.2
+        # are text-only.
+        "capabilities" => { "vision" => true }.freeze,
+        "model_capabilities" => {
+          "deepseek/deepseek-v4-flash" => { "vision" => false }.freeze,
+          "z-ai/glm-5.2"               => { "vision" => false }.freeze
+        }.freeze,
+        "default_ocr_model" => "google/gemini-3.5-flash",
+        "website_url" => "https://www.orcarouter.ai"
+      }.freeze,
+
+      "requesty" => {
+        "name" => "Requesty",
+        "base_url" => "https://router.requesty.ai/v1",
+        "api" => "openai-completions",
+        "default_model" => "claude-sonnet-4-6",
+        # Curated default lineup of Requesty managed policies (GET /v1/models/managed).
+        # A managed policy is a short model id that Requesty routes across several
+        # upstream providers. Users can still type any other id manually, including
+        # the full "vendor/model" catalogue ids (e.g. "openai/gpt-4o-mini").
+        "models" => [
+          "claude-sonnet-4-6",
+          "claude-opus-4-8",
+          "claude-opus-4-7",
+          "claude-opus-4-6",
+          "claude-haiku-4-5",
+          "gpt-5.6-sol",
+          "gpt-5.6-terra",
+          "gpt-5.6-luna",
+          "gpt-5.5",
+          "gpt-5.4",
+          "gpt-5.4-mini",
+          "gemini-3.8-flash"
+        ],
+        # Per-primary lite pairing, same shape as the openrouter preset.
+        "lite_models" => {
+          "claude-sonnet-4-6" => "claude-haiku-4-5",
+          "claude-opus-4-8"   => "claude-haiku-4-5",
+          "claude-opus-4-7"   => "claude-haiku-4-5",
+          "claude-opus-4-6"   => "claude-haiku-4-5",
+          "gpt-5.6-sol"       => "gpt-5.6-luna",
+          "gpt-5.6-terra"     => "gpt-5.6-luna",
+          "gpt-5.5"           => "gpt-5.4-mini",
+          "gpt-5.4"           => "gpt-5.4-mini"
+        },
+        # Requesty also serves the native Anthropic /v1/messages endpoint, so
+        # Claude models route there to preserve cache_control fidelity (same
+        # rationale as the openrouter preset). Other models keep the OpenAI shim.
+        "model_api_overrides" => {
+          /\Aanthropic\// => "anthropic-messages",
+          /\Aclaude[-.]/  => "anthropic-messages"
+        }.freeze,
+        # Same API key works on every regional endpoint; the EU one keeps
+        # traffic inside the EU (Frankfurt).
+        "endpoint_variants" => [
+          { "label" => "Global", "base_url" => "https://router.requesty.ai/v1" }.freeze,
+          { "label" => "EU",     "base_url" => "https://router.eu.requesty.ai/v1", "region" => "eu" }.freeze
+        ].freeze,
+        "default_ocr_model" => "gemini-3.8-flash",
+        "website_url" => "https://app.requesty.ai/api-keys"
+      }.freeze
+
+    }.freeze
+
+    # Canonical provider identifiers. Mirror the PRESETS keys above; keep both
+    # in sync when adding or renaming a provider.
+    OPENCLACKY_ID     = "openclacky"
+    OPENROUTER_ID     = "openrouter"
+    DEEPSEEKV4_ID     = "deepseekv4"
+    GLM_ID            = "glm"
+    KIMI_ID           = "kimi"
+    KIMI_CODING_ID    = "kimi-coding"
+    MINIMAX_ID        = "minimax"
+    ANTHROPIC_ID      = "anthropic"
+    OPENAI_ID         = "openai"
+    QWEN_ID           = "qwen"
+    MIMO_ID           = "mimo"
+    VOLCENGINE_ARK_ID = "volcengine-ark"
+    OLLAMA_ID         = "ollama"
+    ORCAROUTER_ID     = "orcarouter"
+    REQUESTY_ID       = "requesty"
+
+    MEDIA_KINDS = %w[image video audio stt video_understanding].freeze
+
+    # Sidecar `type` values: capability configs that are not chat models.
+    SIDECAR_KINDS = (MEDIA_KINDS + ["ocr"]).freeze
+
+    # Per-model maximum output token limits.
+    #
+    # The Agent global default (@max_tokens = 16_384) is tuned for the lowest
+    # common denominator. Strong reasoning models (GLM-5.2, Kimi-K3, MiMo-V2.5)
+    # support 64K–128K output but are artificially throttled to 16K, causing
+    # truncation on long reasoning chains and code generation.
+    #
+    # Entries are matched top-to-bottom; the first match wins. Models not
+    # listed here fall back to the global default.
+    MODEL_MAX_OUTPUT = [
+      { pattern: /glm/i,           limit: 65_536 }, # GLM-5.2: 128K output ceiling; 64K ample for reasoning+answer
+      { pattern: /kimi-k3/i,       limit: 65_536 }, # Kimi K3: max_completion_tokens=131072 (max 1M); 64K ample
+      { pattern: /mimo-v2\.5-pro/i, limit: 65_536 }, # MiMo-V2.5-Pro: max_completion_tokens=131072; 64K ample
+      { pattern: /mimo/i,           limit: 32_768 }, # MiMo-V2.5: max_completion_tokens=32768; full default ceiling
+      { pattern: /gemini/i,        limit: 65_536 }  # Gemini 3.x: 64K max output ceiling
+    ].freeze
+
+    class << self
+      # Check if a provider preset exists
+      # @param provider_id [String] The provider identifier (e.g., "anthropic", "openrouter")
+      # @return [Boolean] True if the preset exists
+      def exists?(provider_id)
+        PRESETS.key?(provider_id)
+      end
+
+      # Get a provider preset by ID
+      # @param provider_id [String] The provider identifier
+      # @return [Hash, nil] The preset configuration or nil if not found
+      def get(provider_id)
+        PRESETS[provider_id]
+      end
+
+      # Get the default model for a provider
+      # @param provider_id [String] The provider identifier
+      # @return [String, nil] The default model name or nil if provider not found
+      def default_model(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("default_model")
+      end
+
+      # Get the base URL for a provider
+      # @param provider_id [String] The provider identifier
+      # @return [String, nil] The base URL or nil if provider not found
+      def base_url(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("base_url")
+      end
+
+      # Get the API type for a provider
+      # @param provider_id [String] The provider identifier
+      # @return [String, nil] The API type or nil if provider not found
+      def api_type(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("api")
+      end
+
+      # Resolve the per-model maximum output token limit.
+      # Returns nil when no MODEL_MAX_OUTPUT entry matches — callers should
+      # then fall back to the global default (@max_tokens).
+      #
+      # @param model_name [String] The model name (e.g. "glm-5.2")
+      # @return [Integer, nil] The max output limit, or nil if undeclared
+      def max_output_for(model_name)
+        return nil if model_name.nil? || model_name.to_s.empty?
+        entry = MODEL_MAX_OUTPUT.find { |e| model_name.to_s.match?(e[:pattern]) }
+        entry&.[](:limit)
+      end
+
+      # Resolve the API type for a specific provider+model pair.
+      #
+      # Resolution order:
+      #   1. user_override — an explicit user-selected api_format on the model
+      #      entry (e.g. "anthropic-messages" / "openai-completions").
+      #   2. PRESETS[provider_id]["model_api_overrides"] — first key (String or
+      #      Regexp) that matches the model name wins.
+      #   3. PRESETS[provider_id]["api"] — the provider-wide default.
+      #   4. nil — unknown provider.
+      #
+      # Use this instead of api_type when you need the precise transport for a
+      # given model (e.g. routing OpenRouter's Claude requests to the native
+      # /v1/messages endpoint to preserve prompt-cache fidelity).
+      #
+      # @param provider_id [String] The provider identifier
+      # @param model_name [String, nil] The specific model name
+      # @param user_override [String, nil] Explicit user-selected API format,
+      #   wins over all preset resolution when present
+      # @return [String, nil] The API type (e.g. "anthropic-messages")
+      def api_type_for_model(provider_id, model_name, user_override: nil)
+        return user_override unless user_override.nil? || user_override.to_s.strip.empty?
+
+        preset = PRESETS[provider_id]
+        return nil unless preset
+
+        overrides = preset["model_api_overrides"]
+        if overrides.is_a?(Hash) && model_name
+          name = model_name.to_s
+          matched = overrides.find do |pattern, _api|
+            case pattern
+            when Regexp then pattern.match?(name)
+            when String then pattern == name
+            else false
+            end
+          end
+          return matched[1] if matched
+        end
+
+        preset["api"]
+      end
+
+      # Returns true when the provider+model should be talked to using the
+      # native Anthropic /v1/messages format. This is the single source of
+      # truth for deciding anthropic_format at Client construction time.
+      # @param provider_id [String] The provider identifier
+      # @param model_name [String, nil] The specific model name
+      # @return [Boolean]
+      def anthropic_format_for_model?(provider_id, model_name)
+        api_type_for_model(provider_id, model_name) == "anthropic-messages"
+      end
+
+      # List all available provider IDs
+      # @return [Array<String>] List of provider identifiers
+      def provider_ids
+        PRESETS.keys
+      end
+
+      # List all available providers with their names
+      # @return [Array<Array(String, String)>] Array of [id, name] pairs
+      def list
+        PRESETS.map { |id, config| [id, config["name"]] }
+      end
+
+      # Get available models for a provider
+      # @param provider_id [String] The provider identifier
+      # @return [Array<String>] List of model names (empty if dynamic)
+      def models(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("models") || []
+      end
+
+      # Get available image generation models for a provider.
+      # Returns an empty array when the provider doesn't declare any —
+      # callers should treat that as "image generation not supported by this provider".
+      # @param provider_id [String] The provider identifier
+      # @return [Array<String>] List of image model names
+      def image_models(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("image_models") || []
+      end
+
+      def image_model_aliases(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("image_model_aliases") || {}
+      end
+
+      def video_model_aliases(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("video_model_aliases") || {}
+      end
+
+      def audio_model_aliases(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("audio_model_aliases") || {}
+      end
+
+      def stt_models(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("stt_models") || []
+      end
+
+      def stt_model_aliases(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("stt_model_aliases") || {}
+      end
+
+      def video_understanding_models(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("video_understanding_models") || []
+      end
+
+      def video_understanding_model_aliases(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("video_understanding_model_aliases") || {}
+      end
+
+      def media_model_aliases(provider_id, kind)
+        case kind.to_s
+        when "image" then image_model_aliases(provider_id)
+        when "video" then video_model_aliases(provider_id)
+        when "audio" then audio_model_aliases(provider_id)
+        when "stt"   then stt_model_aliases(provider_id)
+        when "video_understanding" then video_understanding_model_aliases(provider_id)
+        else {}
+        end
+      end
+
+      # Video generation models — placeholder. No provider supports video
+      # via Clacky yet; once they do, declare "video_models" alongside
+      # "image_models" in the relevant PRESETS entry and this returns it.
+      def video_models(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("video_models") || []
+      end
+
+      # Audio generation models — same placeholder pattern as video_models.
+      def audio_models(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("audio_models") || []
+      end
+
+      # OCR sidecar candidates: every chat model under this provider that's
+      # vision-capable. Derived from `vision` capability so we don't have
+      # to maintain a parallel list — a model that can see is by definition
+      # a candidate for "describe an image as text". Image-generation models
+      # are excluded (they take prompts and return pixels, not the other way).
+      # @param provider_id [String]
+      # @return [Array<String>]
+      def ocr_models(provider_id)
+        preset = PRESETS[provider_id]
+        return [] unless preset
+        (preset["models"] || []).select { |m| supports?(provider_id, :vision, model_name: m) }
+      end
+
+      # Default OCR sidecar model for a provider. Falls back to the first
+      # vision-capable model if the preset doesn't pin an explicit default.
+      # @param provider_id [String]
+      # @return [String, nil] nil when the provider has zero vision-capable models
+      def default_ocr_model(provider_id)
+        preset = PRESETS[provider_id]
+        return nil unless preset
+        explicit = preset["default_ocr_model"]
+        return explicit if explicit && ocr_models(provider_id).include?(explicit)
+        ocr_models(provider_id).first
+      end
+
+      # Unified entry for media model lookup by kind.
+      # @param provider_id [String]
+      # @param kind [String] one of "image" / "video" / "audio" / "stt"
+      # @return [Array<String>]
+      def media_models(provider_id, kind)
+        case kind.to_s
+        when "image" then image_models(provider_id)
+        when "video" then video_models(provider_id)
+        when "audio" then audio_models(provider_id)
+        when "stt"   then stt_models(provider_id)
+        when "video_understanding" then video_understanding_models(provider_id)
+        else []
+        end
+      end
+
+      # Default media model for a kind under a provider. Falls back to the
+      # first declared model when no explicit default is set in the preset.
+      # Used by AgentConfig#derive_media_models! to pick which model to
+      # surface when the user is on "auto" mode.
+      def default_media_model(provider_id, kind)
+        preset = PRESETS[provider_id]
+        return nil unless preset
+        explicit = preset["default_#{kind}_model"]
+        return explicit if explicit
+        media_models(provider_id, kind).first
+      end
+
+      # The set of media kinds Clacky knows about. Drives UI rendering and
+      # derivation loops — adding a new modality means listing it here plus
+      # adding the corresponding generator class.
+      def media_kinds
+        MEDIA_KINDS
+      end
+
+      # Get the lite model for a provider.
+      # @param provider_id [String] The provider identifier
+      # @param primary_model [String, nil] The currently-selected primary model name.
+      #   When given, look it up in the provider's `lite_models` table first
+      #   (so one provider can host multiple model families, each with its own
+      #   lite sidekick — e.g. Claude Opus/Sonnet → Haiku, DeepSeek Pro → Flash).
+      #   Falls back to the global `lite_model` field for old-style presets
+      #   (e.g. deepseekv4) that declare a single provider-wide lite.
+      # @return [String, nil] The lite model name, or nil when the primary is
+      #   already lite-class (no entry) and no global `lite_model` is defined.
+      def lite_model(provider_id, primary_model = nil)
+        preset = PRESETS[provider_id]
+        return nil unless preset
+
+        if primary_model && preset["lite_models"].is_a?(Hash)
+          mapped = preset["lite_models"][primary_model]
+          return mapped if mapped
+          # When a `lite_models` table is defined but the current primary
+          # isn't listed, it means the primary is already a lite-class model
+          # (e.g. haiku / v4-flash) — do NOT fall back to the legacy single
+          # field, because that would incorrectly inject a lite for a model
+          # that doesn't need one.
+          return nil if preset["lite_models"].any?
+        end
+
+        preset["lite_model"]
+      end
+
+      # Get the fallback model for a given model within a provider.
+      # Returns nil if no fallback is defined for that model.
+      # @param provider_id [String] The provider identifier
+      # @param model [String] The primary model name
+      # @return [String, nil] The fallback model name or nil
+      def fallback_model(provider_id, model)
+        preset = PRESETS[provider_id]
+        preset&.dig("fallback_models", model)
+      end
+
+      # Find provider ID by base URL.
+      # Matches if the given URL starts with the provider's base_url (after normalisation),
+      # so both exact matches and sub-path variants (e.g. "/v1") are recognised.
+      #
+      # Also scans `endpoint_variants` (when present) so providers that operate
+      # multiple regional / billing-plan endpoints under the same identity
+      # (e.g. GLM on open.bigmodel.cn + api.z.ai, MiniMax on .com + .io) are
+      # all recognised as that single provider — one capability definition,
+      # N entry URLs. Without this, users configured with a non-default
+      # variant fall back to the "unknown provider" path and miss capability
+      # enforcement (see C-5563).
+      # @param base_url [String] The base URL to look up
+      # @return [String, nil] The provider ID or nil if not found
+      def find_by_base_url(base_url)
+        return nil if base_url.nil? || base_url.empty?
+        normalized = base_url.to_s.chomp("/")
+        PRESETS.find do |_id, preset|
+          # Collect every URL this preset claims: the canonical base_url plus
+          # any declared endpoint_variants. Dedup so the canonical one showing
+          # up in both lists doesn't change behaviour.
+          candidates = [preset["base_url"]]
+          variants = preset["endpoint_variants"]
+          if variants.is_a?(Array)
+            variants.each { |v| candidates << v["base_url"] if v.is_a?(Hash) }
+          end
+          candidates.compact.uniq.any? do |candidate|
+            preset_base = candidate.to_s.chomp("/")
+            next false if preset_base.empty?
+            normalized == preset_base || normalized.start_with?("#{preset_base}/")
+          end
+        end&.first
+      end
+
+      # Resolve the provider id for a model entry, trying base_url first and
+      # then falling back to an api_key hint for the openclacky family.
+      #
+      # Why the api_key fallback exists:
+      #   For local-debug / self-hosted proxy setups, users sometimes point
+      #   an "abs-claude-*" or "dsk-deepseek-*" model at http://localhost:XXXX
+      #   while still using a real `clacky-...` api key. Pure base_url matching
+      #   would report "unknown provider" and downstream logic (lite pairing,
+      #   fallback_models, capability detection) silently degrades. Recognising
+      #   the `clacky-` key prefix keeps those flows working without forcing
+      #   the user to edit base_url.
+      #
+      # Not generalised to other providers: the `sk-...` prefix is used by
+      # OpenAI, DeepSeek, Moonshot, and many others, so it can't uniquely
+      # identify a provider. We only special-case `clacky-` because it's
+      # unique to us and the debug-proxy scenario is specifically ours.
+      #
+      # @param base_url [String, nil] the configured base_url
+      # @param api_key  [String, nil] the configured api_key
+      # @return [String, nil] provider id or nil if unresolvable
+      def resolve_provider(base_url: nil, api_key: nil)
+        id = find_by_base_url(base_url)
+        return id if id
+
+        # Local-debug fallback: clacky-* api keys belong to the openclacky
+        # family. Both "openclacky" and "clackyai-sea" share the same key
+        # namespace and an identical model lineup/lite mapping, so picking
+        # "openclacky" is equivalent for downstream lookups.
+        if api_key.is_a?(String) && api_key.start_with?("clacky-")
+          return "openclacky"
+        end
+
+        if base_url.is_a?(String) &&
+           base_url.match?(%r{\Ahttps?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|/|\z)}i)
+          return "openclacky"
+        end
+
+        nil
+      end
+
+      # Translate a display model name into the real model id the target
+      # endpoint expects. Some providers expose the same model under different
+      # ids per billing endpoint (e.g. Volcengine Ark's pay-as-you-go API needs
+      # versioned ids like "doubao-seed-2-1-pro-260628" while the Coding/Agent
+      # Plan endpoints accept the short "doubao-seed-2.1-pro"). Users always see
+      # and pick the short name; this swaps it just before the request goes out.
+      #
+      # Returns the original model unchanged when no alias applies (unknown
+      # provider, endpoint without an alias group, or model not in the map).
+      #
+      # @param base_url [String, nil] the configured base_url (identifies endpoint)
+      # @param api_key  [String, nil] the configured api_key (provider fallback)
+      # @param model    [String, nil] the display model name
+      # @return [String, nil] the real model id to send, or the input unchanged
+      def resolve_api_model(base_url:, api_key: nil, model:)
+        return model if model.nil?
+
+        provider_id = resolve_provider(base_url: base_url, api_key: api_key)
+        return model unless provider_id
+
+        preset = PRESETS[provider_id]
+        aliases = preset && preset["api_model_aliases"]
+        return model unless aliases.is_a?(Hash)
+
+        group = alias_group_for_base_url(preset, base_url)
+        return model unless group
+
+        aliases.dig(group, model.to_s) || model
+      end
+
+      # Find which alias group the given base_url belongs to by matching it
+      # against the preset's endpoint_variants. Uses exact base_url equality
+      # (after normalising trailing slash) so "/api/v3" never leaks into the
+      # "/api/coding/v3" match.
+      def alias_group_for_base_url(preset, base_url)
+        return nil if base_url.nil?
+        variants = preset["endpoint_variants"]
+        return nil unless variants.is_a?(Array)
+
+        normalized = base_url.to_s.chomp("/")
+        variant = variants.find do |v|
+          v.is_a?(Hash) && v["base_url"].to_s.chomp("/") == normalized
+        end
+        variant && variant["alias_group"]
+      end
+      #
+      # Resolution order (most specific wins):
+      #   1. PRESETS[provider_id]["model_capabilities"][model_name] — per-model
+      #      override, used when a single provider hosts a mix of capabilities
+      #      (e.g. openclacky serves both Claude [vision] and DeepSeek [text]).
+      #   2. PRESETS[provider_id]["capabilities"] — provider-wide defaults,
+      #      used when the whole lineup shares the same capabilities.
+      #   3. {} — no declaration; callers get the conservative default (true)
+      #      via `supports?`.
+      #
+      # Returns a plain Hash (always safe to inspect; never nil).
+      # @param provider_id [String] The provider identifier
+      # @param model_name [String, nil] Optional specific model for override lookup
+      # @return [Hash] capabilities mapping (e.g. { "vision" => true })
+      def capabilities(provider_id, model_name: nil)
+        preset = PRESETS[provider_id]
+        return {} unless preset
+
+        provider_caps = preset["capabilities"] || {}
+        return provider_caps.dup unless model_name
+
+        model_caps = preset.dig("model_capabilities", model_name) || {}
+        provider_caps.merge(model_caps)
+      end
+
+      # True when +id+ names a known preset. Callers use this to decide
+      # whether a model entry's `provider_id` can drive capability lookups,
+      # or whether it should fall through to base_url matching instead.
+      def preset?(id)
+        id.is_a?(String) && PRESETS.key?(id)
+      end
+
+      # Check if a provider+model supports a capability.
+      # Unknown provider / missing capability declaration → returns true
+      # (conservative default: assume supported unless we explicitly say otherwise).
+      # This keeps custom base_urls working and avoids over-aggressive downgrades.
+      #
+      # @param provider_id [String] The provider identifier
+      # @param capability [String, Symbol] The capability name (e.g. :vision, "vision")
+      # @param model_name [String, nil] Optional specific model name
+      # @return [Boolean] true unless the preset explicitly says false
+      def supports?(provider_id, capability, model_name: nil)
+        preset = PRESETS[provider_id]
+        return true unless preset
+
+        key = capability.to_s
+        caps = capabilities(provider_id, model_name: model_name)
+        # When the capability is not declared at either level, default to true.
+        return true unless caps.key?(key)
+        caps[key] != false
+      end
+    end
+  end
+end

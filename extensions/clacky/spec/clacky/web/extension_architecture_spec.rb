@@ -1,0 +1,343 @@
+# frozen_string_literal: true
+
+# Static guardrails for the WebUI extension architecture (core/ext.js) and the
+# store/view layering convention (features/<feature>/{store,view}.js).
+#
+# These are source-level checks, not behavioural tests: they encode the
+# "constitution" of the extension system so a future refactor can't silently
+# break the three survival promises — isolation, escape hatch, error boundary —
+# or blur the store/view split that keeps pure mode safe.
+
+RSpec.describe "WebUI extension architecture" do
+  let(:web_dir)  { File.expand_path("../../../lib/clacky/web", __dir__) }
+  let(:ext_js)   { File.read(File.join(web_dir, "core", "ext.js")) }
+  let(:features) { Dir[File.join(web_dir, "features", "*")].select { |p| File.directory?(p) } }
+
+  # ─── core/ext.js contract ──────────────────────────────────────────────────
+
+  describe "core/ext.js registry contract" do
+    it "exists" do
+      expect(File).to exist(File.join(web_dir, "core", "ext.js"))
+    end
+
+    it "detects pure mode from the ?pure=true query param" do
+      expect(ext_js).to match(/get\(["']pure["']\)\s*===\s*["']true["']/)
+    end
+
+    it "exposes the full extension API surface (register/subscribe/ui.mount)" do
+      expect(ext_js).to include("register(")
+      expect(ext_js).to include("subscribe(")
+      expect(ext_js).to include("mount(")
+      expect(ext_js).to include("renderSlot(")
+    end
+
+    it "makes register/subscribe/mount no-ops under pure mode" do
+      # Each public registration entry point must bail out when PURE is on, so
+      # extension code can never affect the page in the escape-hatch mode.
+      %w[register subscribe mount].each do |fn|
+        body = ext_js[/\b#{fn}\([^)]*\)\s*\{(.+?)\n  \}/m, 1]
+        expect(body).not_to be_nil, "could not locate #{fn}() body in ext.js"
+        expect(body).to match(/if\s*\(\s*PURE/),
+          "#{fn}() must short-circuit on PURE (pure-mode no-op guarantee)"
+      end
+    end
+
+    it "wraps extension callbacks in a guard (error boundary)" do
+      expect(ext_js).to match(/function _guard\(/)
+      expect(ext_js).to match(/try\s*\{/)
+      expect(ext_js).to match(/catch\s*\(/)
+    end
+
+    it "degrades a crashed slot to a marked placeholder, not a thrown error" do
+      expect(ext_js).to include('data-ext-status')
+      expect(ext_js).to include('"crashed"')
+    end
+
+    it "does not call into host modules by name (extensions reach host only via the registry)" do
+      # ext.js is the boundary; it must not hard-depend on feature globals.
+      %w[Sessions Skills Tasks Settings Router].each do |host_global|
+        expect(ext_js).not_to match(/\b#{host_global}\./),
+          "ext.js must not reference host module #{host_global} directly"
+      end
+    end
+
+    it "marks tab-strip overflow in both directions for a neutral edge cue" do
+      styles = File.read(File.join(web_dir, "app.css"))
+
+      expect(ext_js).to include('tabFrame.classList.toggle("can-scroll-left"')
+      expect(ext_js).to include('tabFrame.classList.toggle("can-scroll-right"')
+      expect(ext_js).to include("tabBar.scrollWidth - tabBar.clientWidth")
+      expect(styles).to include(".aside-tabs-frame.can-scroll-left::before")
+      expect(styles).to include(".aside-tabs-frame.can-scroll-right::after")
+      expect(styles).to include("linear-gradient(to left, var(--color-bg-secondary), transparent)")
+      expect(styles.scan("var(--aside-tabbar-actions-width)").length).to be >= 3
+    end
+
+    it "maps vertical wheel input to horizontal tab scrolling without trapping the edges" do
+      expect(ext_js).to include('tabBar.addEventListener("wheel", scrollTabsWithWheel, { passive: false })')
+      expect(ext_js).to include("Math.abs(event.deltaY) <= Math.abs(event.deltaX)")
+      expect(ext_js).to include("nextScroll - tabBar.scrollLeft")
+      expect(ext_js).to match(/if \(Math\.abs\(nextScroll - tabBar\.scrollLeft\) < 1\) return;\s*event\.preventDefault\(\)/)
+      expect(ext_js).to include('tabBar.removeEventListener("wheel", scrollTabsWithWheel)')
+    end
+  end
+
+  # ─── store/view layering discipline ─────────────────────────────────────────
+
+  describe "store/view layering" do
+    it "every feature directory ships both a store.js and a view.js" do
+      features.each do |dir|
+        expect(File).to exist(File.join(dir, "store.js")),
+          "#{File.basename(dir)} feature missing store.js"
+        expect(File).to exist(File.join(dir, "view.js")),
+          "#{File.basename(dir)} feature missing view.js"
+      end
+    end
+
+    it "store.js never touches the DOM (data/state/network only)" do
+      dom_apis = /\b(document\.(getElementById|querySelector|querySelectorAll|createElement|addEventListener)|\.innerHTML\b|\.appendChild\b|\.insertAdjacent)/
+      features.each do |dir|
+        store = File.join(dir, "store.js")
+        next unless File.exist?(store)
+
+        offenders = File.read(store).each_line.with_index(1).select { |line, _| line.match?(dom_apis) }
+        expect(offenders).to be_empty,
+          "#{File.basename(dir)}/store.js touches the DOM (store must stay render-free):\n" \
+          "#{offenders.map { |l, n| "  L#{n}: #{l.strip}" }.join("\n")}"
+      end
+    end
+
+    it "view.js never fetches core data directly (must go through the store)" do
+      # The view reacts to store events and calls store actions; it must not own
+      # the network. Uploads via /api/upload are a pure-UI affordance and allowed.
+      features.each do |dir|
+        view = File.join(dir, "view.js")
+        next unless File.exist?(view)
+
+        offenders = File.read(view).each_line.with_index(1).select do |line, _|
+          line.match?(/\bfetch\(/) && !line.include?("/api/upload")
+        end
+        expect(offenders).to be_empty,
+          "#{File.basename(dir)}/view.js fetches data directly (route it through the store):\n" \
+          "#{offenders.map { |l, n| "  L#{n}: #{l.strip}" }.join("\n")}"
+      end
+    end
+
+    it "core view.js does NOT depend on Clacky.ext.subscribe (silenced under pure mode)" do
+      # The core panel must keep rendering in pure mode, so it must use the
+      # store's always-live internal bus (Store.on), never the extension bus
+      # which is intentionally a no-op when ?pure=true.
+      features.each do |dir|
+        view = File.join(dir, "view.js")
+        next unless File.exist?(view)
+
+        expect(File.read(view)).not_to match(/Clacky\.ext\.subscribe/),
+          "#{File.basename(dir)}/view.js subscribes via Clacky.ext (would break in pure mode); " \
+          "use the store's internal bus instead"
+      end
+    end
+
+    it "store.js mirrors changes onto the extension bus (Clacky.ext.emit)" do
+      # Stores broadcast to extensions so they can observe core data changes.
+      features.each do |dir|
+        store = File.join(dir, "store.js")
+        next unless File.exist?(store)
+
+        expect(File.read(store)).to match(/Clacky\.ext\.emit/),
+          "#{File.basename(dir)}/store.js should mirror events to the extension bus"
+      end
+    end
+  end
+
+  # ─── ws-dispatcher ext bridge contract ──────────────────────────────────────
+
+  describe "ws-dispatcher session_update bridge normalization" do
+    let(:ws_js) { File.read(File.join(web_dir, "ws-dispatcher.js")) }
+    let(:sessions_js) { File.read(File.join(web_dir, "sessions.js")) }
+
+    it "normalizes session_update shape (1) (nested ev.session) by lifting session_id and status to the top level" do
+      # http_server broadcast_session_update sends { type, session: { id, status, ... } }
+      # with no top-level session_id. The bridge must lift session.id and session.status
+      # so extension subscribers see a consistent sessionId/status regardless of source.
+      expect(ws_js).to match(/session_update.*ev\.session.*session_id:\s*ev\.session\.id/m),
+        "bridge must lift ev.session.id to session_id for session_update shape (1)"
+      expect(ws_js).to match(/status:\s*ev\.session\.status/),
+        "bridge must lift ev.session.status to top-level status for session_update shape (1)"
+    end
+
+    it "preserves the original ev spread so shape-aware extensions are not broken" do
+      # ...ev (or ...payload) keeps the nested session object; extensions reading
+      # ev.session.status still work. New top-level keys are additive, not replacing.
+      expect(ws_js).to match(/\.\.\.(ev|payload)/),
+        "bridge must spread original event fields (additive normalization, not replacement)"
+    end
+
+    it "emits a truthy sessionId for both shapes" do
+      # For shape (1) ev.session_id is undefined; the bridge must fall back to ev.session.id
+      # so sessionId is never undefined for session_update subscribers.
+      expect(ws_js).to match(/payload\.session_id\s*\|\|\s*\(ev\.session\s*&&\s*ev\.session\.id\)/),
+        "bridge must fall back to ev.session.id when top-level session_id is absent"
+    end
+
+    it "adds persisted creation snapshots while ordinary updates remain patches" do
+      expect(ws_js).to match(/if\s*\(ev\.session\s*&&\s*\(ev\.created/),
+        "created session_update snapshots must enter the canonical session list"
+      expect(ws_js).to match(/else\s*\{\s*Sessions\.patch\(sid,\s*patch\)/m),
+        "ordinary session_update snapshots must preserve pagination-safe patch behavior"
+    end
+
+    it "promotes a full snapshot for the session being viewed when it is not listed yet" do
+      # The active session may live only in the extra-session cache (opened from
+      # search or a deep link), which the sidebar never renders. Patching it
+      # would leave the list without a row until a browser reload, so a full
+      # snapshot must be promoted instead -- but only while it is still
+      # unlisted, keeping the patch bookkeeping for rows that already exist.
+      expect(ws_js).to match(/sid\s*===\s*Sessions\.activeId\s*&&\s*!listed/),
+        "an unlisted active session must be promoted out of the extra cache"
+      expect(ws_js).to match(/const listed\s*=\s*Sessions\.all\.some\(s\s*=>\s*s\.id\s*===\s*sid\)/),
+        "promotion must be gated on the session being absent from the canonical list"
+    end
+
+    it "promotes a creation snapshot out of the extra-session cache" do
+      expect(sessions_js).to match(/_extraSessions\.findIndex\(s\s*=>\s*s\.id\s*===\s*session\.id\)/),
+        "Sessions.add must locate a matching cached extra session"
+      expect(sessions_js).to match(/_extraSessions\.splice\(extraIdx,\s*1\)/),
+        "Sessions.add must remove a promoted session from the extra cache"
+    end
+  end
+
+  # ─── app.js ext-workspace teardown contract ─────────────────────────────────
+
+  describe "app.js ext-workspace teardown" do
+    let(:app_js) { File.read(File.join(web_dir, "app.js")) }
+
+    it "saves the return value of ws.render() as a potential teardown function" do
+      # ext.js render contract: returning a function registers it as a teardown.
+      # app.js must not discard that return value.
+      expect(app_js).to match(/_wsTeardown\s*=\s*ws\.render\(/),
+        "app.js ext-workspace branch must assign ws.render() return value to _wsTeardown"
+    end
+
+    it "invokes the teardown when leaving the workspace view" do
+      # Teardown must run on any view transition away from ext-workspace, not only
+      # on re-entry into another workspace. Placing the cleanup at the top of _apply
+      # covers all leaving paths.
+      expect(app_js).to match(/if\s*\(\s*typeof\s+_wsTeardown\s*===\s*["']function["']\s*\)/),
+        "_apply must invoke _wsTeardown when it is a function"
+      expect(app_js).to match(/_wsTeardown\(\)/),
+        "_apply must call the teardown function"
+    end
+
+    it "resets _wsTeardown to null after invoking it" do
+      expect(app_js).to match(/_wsTeardown\s*=\s*null/),
+        "_wsTeardown must be reset to null after invocation to avoid double-calling"
+    end
+  end
+
+  # ─── index.html wiring ──────────────────────────────────────────────────────
+
+  describe "index.html extension wiring" do
+    let(:index) { File.read(File.join(web_dir, "index.html")) }
+
+    it "loads core/ext.js before any feature/extension code" do
+      ext_pos = index.index("/core/ext.js")
+      app_pos = index.index("/app.js")
+      expect(ext_pos).not_to be_nil
+      expect(app_pos).not_to be_nil
+      expect(ext_pos).to be < app_pos
+    end
+
+    it "carries the {{EXT_SCRIPTS}} injection point in the script-loading region" do
+      expect(index).to include("{{EXT_SCRIPTS}}")
+    end
+
+    it "loads each feature's store.js before its view.js" do
+      features.each do |dir|
+        name = File.basename(dir)
+        store_pos = index.index("features/#{name}/store.js")
+        view_pos  = index.index("features/#{name}/view.js")
+        next if store_pos.nil? || view_pos.nil?
+
+        expect(store_pos).to be < view_pos,
+          "index.html must load features/#{name}/store.js before view.js"
+      end
+    end
+
+    it "declares the named UI slots extensions mount into" do
+      # The host opens these injection points; losing one silently strands every
+      # extension that targets it. Both "new place" and "enhance existing" slots.
+      %w[
+        header.left header.right sidebar.nav sidebar.footer main.workspace
+        settings.tabs settings.body
+      ].each do |slot|
+        expect(index).to match(/data-slot=["']#{Regexp.escape(slot)}["']/),
+          "index.html must declare the #{slot} extension slot"
+      end
+    end
+
+    it "renders every declared slot generically (no slot left unmounted)" do
+      # A single sweep over [data-slot] mounts all of them, so adding a slot in
+      # markup is enough — no per-slot wiring to forget.
+      expect(index).to match(/querySelectorAll\(\s*["']\[data-slot\]["']\s*\)/)
+      expect(index).to include("Clacky.ext.renderSlot(")
+    end
+  end
+
+  # ─── Clacky.* host facades — the single public API surface ─────────────────
+
+  describe "Clacky.* namespace exposes core host facades" do
+    # Extensions and AI-generated code should reach host services through the
+    # single `Clacky` namespace (already the escape hatch on window). Each
+    # facade must be assigned back onto `Clacky` next to its IIFE, so both the
+    # legacy bare form (`Sessions.on`) and the recommended form
+    # (`Clacky.Sessions.on` / `window.Clacky.Sessions.on`) work identically.
+    {
+      "Sessions"       => "sessions.js",
+      "Skills"         => "features/skills/store.js",
+      "SkillAC"        => "skills.js",
+      "Router"         => "app.js",
+      "Modal"          => "app.js",
+      "I18n"           => "i18n.js",
+      "Notify"         => "components/notify.js",
+      "Auth"           => "auth.js",
+      "WS"             => "ws.js",
+      "Workspace"      => "features/workspace/store.js",
+      "WorkspaceStore" => "features/workspace/store.js",
+      "Backup"         => "features/backup/store.js",
+      "Aside"          => "core/aside.js",
+    }.each do |name, rel|
+      it "exposes Clacky.#{name} in #{rel}" do
+        src = File.read(File.join(web_dir, rel))
+        expect(src).to include("Clacky.#{name} = "),
+          "#{rel} must assign `Clacky.#{name} = #{name};` so extensions can reach it via the Clacky namespace"
+      end
+    end
+  end
+
+  describe "aside temporary width contract" do
+    let(:aside_js) { File.read(File.join(web_dir, "core", "aside.js")) }
+    let(:workspace_view_js) { File.read(File.join(web_dir, "features", "workspace", "view.js")) }
+    let(:git_view_js) do
+      File.read(File.expand_path("../../../lib/clacky/default_extensions/git/panels/git/view.js", __dir__))
+    end
+
+    it "keeps temporary width ownership in the host facade" do
+      expect(aside_js).to include("requestWidth: requestWidth")
+      expect(aside_js).to include("const widthRequests = new Map()")
+      expect(aside_js).to include("widthRequests.delete(id)")
+      expect(aside_js).to include('window.matchMedia("(max-width: 768px)").matches')
+    end
+
+    it "makes Files release its borrowed width after the final tab and on teardown" do
+      expect(workspace_view_js).to include("Clacky.Aside.requestWidth(VIEWER_ASIDE_WIDTH)")
+      expect(workspace_view_js).to include("if (tabs.length === 0) restoreAsideWidth()")
+      expect(workspace_view_js).to match(/function destroy\(\) \{\s*restoreAsideWidth\(\)/)
+      expect(workspace_view_js).not_to include("requestWidth(VIEWER_ASIDE_WIDTH, { persist: true })")
+    end
+
+    it "keeps the Git diff on the same host-managed contract" do
+      expect(git_view_js).to include("Clacky.Aside.requestWidth(DIFF_ASIDE_WIDTH)")
+      expect(git_view_js).to include("const release = releaseAsideWidth")
+    end
+  end
+end

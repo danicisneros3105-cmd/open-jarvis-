@@ -1,0 +1,804 @@
+// ── WS event dispatcher ───────────────────────────────────────────────────
+//
+// Consumes events emitted by WS (ws.js) and dispatches them to the right
+// business module (Sessions, Tasks, Skills, Channels, Settings, Brand, ...).
+//
+// Kept as a separate file from ws.js on purpose:
+//   - ws.js is a pure transport layer (connect / send / subscribe / reconnect)
+//   - this file is the application-level router that knows about every
+//     business module. Mixing the two would force ws.js to depend on every
+//     other module, breaking layering.
+//
+// Depends on: WS (ws.js), Sessions, Tasks, Skills, Channels, Settings, Brand,
+//             Router, I18n, global $ / escapeHtml / showConfirmModal helpers.
+// ─────────────────────────────────────────────────────────────────────────
+(function() {
+  // Guard: restore hash routing only once after initial session_list arrives.
+  let _initialRestoreDone = false;
+
+  // WS event -> Clacky.ext event name. Mirrored so panels can subscribe
+  // without touching the raw WS layer (keeps extension isolation).
+  const SESSION_EXT_EVENTS = {
+    phase_start: "session:phase-start",
+    phase_end: "session:phase-end",
+    session_list: "session:list",
+    subscribed: "session:subscribed",
+    session_update: "session:update",
+    task_finished: "session:task-finished",
+    session_renamed: "session:renamed",
+    session_deleted: "session:deleted",
+    session_restored: "session:restored",
+    history_user_message: "session:user-message",
+    assistant_message: "session:assistant-message",
+    tool_call: "session:tool-call",
+    tool_result: "session:tool-result",
+    tool_stdout: "session:tool-stdout",
+    tool_error: "session:tool-error",
+    token_usage: "session:token-usage",
+    progress: "session:progress",
+    complete: "session:complete",
+    request_feedback: "session:request-feedback",
+    request_confirmation: "session:request-confirmation",
+    interrupted: "session:interrupted",
+    info: "session:info",
+    warning: "session:warning",
+    success: "session:success",
+    error: "session:error",
+  };
+
+  // ── Phase grouping (folds subagent runs like skill evolution) ───────────
+  //
+  // Strategy: when a phase_start arrives, we append a foldable card to the
+  // outer message stream and push its body onto RenderTarget. Sessions.append*
+  // resolves its destination via RenderTarget.current(), so subagent events
+  // land inside the card. Infrastructure paths (history fetch, empty-hint,
+  // scroll, container clear) read RenderTarget.outer() and stay anchored to
+  // the real #messages node — phase activity never pollutes them.
+  //
+  // The DOM id "messages" is never swapped: external code, CSS, devtools and
+  // closures all see a stable identity.
+  const RenderTarget = (() => {
+    let pinned = null;
+    return {
+      // Concurrent phases make "innermost open phase" meaningless, so events
+      // are routed by their own phase_id (pin) and anything untagged goes to
+      // the outer stream rather than whichever phase happens to be open.
+      pin(el)  { pinned = el; },
+      unpin()  { pinned = null; },
+      current(){ return pinned || document.getElementById("messages"); },
+      outer()  { return document.getElementById("messages"); },
+    };
+  })();
+  window.RenderTarget = RenderTarget;
+
+  const _phases = new Map(); // phase_id -> { id, kind, card, body, summary, order }
+  let _phaseSeq = 0;
+
+  function _phaseIcon(kind) {
+    const map = { subagent: "🤖", fanout_subagent: "🤖", memory_update: "🧠" };
+    return map[kind] || "🧬";
+  }
+
+  // Phase cards sit at the top level of the message stream, right after the
+  // tool call that spawned them (phase_start arrives just after that tool_call
+  // event, so DOM order is naturally "tool call, then its subagent cards").
+  // Nesting them inside the tool's row buried a level deep and collided with
+  // the single live tool-group pointer, so a fan-out of N subagents is now N
+  // sibling foldable cards in the outer stream instead.
+  function _phaseHost() {
+    return RenderTarget.outer();
+  }
+
+  function _beginPhase(ev) {
+    if (_phases.has(ev.phase_id)) return;
+
+    const outer = _phaseHost();
+    if (!outer) return;
+
+    const card = document.createElement("details");
+    card.className = "msg-phase";
+    card.dataset.phaseId = ev.phase_id;
+    card.dataset.phaseKind = ev.kind || "phase";
+    card.open = true;
+
+    const summary = document.createElement("summary");
+    summary.className = "msg-phase-summary";
+    const labelText = ev.label || ev.kind;
+    const icon = _phaseIcon(ev.kind);
+    summary.innerHTML = `<span class="msg-phase-icon">${icon}</span><span class="msg-phase-label">${escapeHtml(labelText)}</span><span class="msg-phase-status">…</span>`;
+    card.appendChild(summary);
+
+    const body = document.createElement("div");
+    body.className = "msg-phase-body";
+    card.appendChild(body);
+
+    outer.appendChild(card);
+
+    _phases.set(ev.phase_id, {
+      id: ev.phase_id,
+      kind: ev.kind,
+      card,
+      body,
+      summary,
+      order: _phaseSeq++,
+    });
+
+    const phase = _phases.get(ev.phase_id);
+    card.addEventListener("toggle", () => {
+      if (!phase.programmaticToggle) phase.userToggled = true;
+    });
+
+    const scroller = RenderTarget.outer();
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  function _endPhase(phaseId, summary) {
+    const phase = _phases.get(phaseId);
+    if (!phase) return;
+    _phases.delete(phaseId);
+    _finalizePhase(phase, { summary });
+  }
+
+  function _setPhaseOpen(phase, open) {
+    phase.programmaticToggle = true;
+    phase.card.open = open;
+    phase.programmaticToggle = false;
+  }
+
+  function _finalizePhase(phase, { summary, incomplete } = {}) {
+    const body = phase.body;
+    const isEmpty = !incomplete && body && body.children.length === 0;
+    if (isEmpty) phase.card.classList.add("msg-phase-empty");
+    if (!phase.userToggled) _setPhaseOpen(phase, false);
+
+    const statusEl = phase.summary && phase.summary.querySelector(".msg-phase-status");
+    if (statusEl) {
+      if (incomplete) {
+        statusEl.textContent = " (interrupted)";
+        statusEl.classList.add("msg-phase-status-incomplete");
+      } else if (isEmpty) {
+        const noChange = I18n.t("phase.no_changes");
+        statusEl.textContent = ` ✓ ${noChange}`;
+      } else if (summary) {
+        statusEl.textContent = ` ✓ ${summary}`;
+      } else {
+        statusEl.textContent = " ✓";
+      }
+    }
+  }
+
+  function _closeAllPhases(reason) {
+    const phases = [..._phases.values()].sort((a, b) => b.order - a.order);
+    _phases.clear();
+    phases.forEach(phase => {
+      _finalizePhase(phase, { incomplete: reason === "incomplete" });
+    });
+  }
+
+  window._closeAllPhases = _closeAllPhases;
+
+
+WS.onEvent(ev => {
+  // Safety nets:
+  // - User just sent a message → any open phase is stale, close it.
+  // - Session changed → phase belongs to the previous session, close it.
+  if ((ev.type === "history_user_message" && !ev.steering) || ev.type === "subscribed") {
+    _closeAllPhases("incomplete");
+  }
+
+  // Concurrent phases interleave, so stack order says nothing about where an
+  // event belongs — route by the phase_id the backend stamped on it.
+  const _taggedPhase = ev.phase_id && ev.type !== "phase_start" && ev.type !== "phase_end"
+    ? _phases.get(ev.phase_id)
+    : null;
+  if (_taggedPhase) RenderTarget.pin(_taggedPhase.body);
+  try {
+    _dispatchEvent(ev);
+  } finally {
+    if (_taggedPhase) RenderTarget.unpin();
+  }
+});
+
+function _dispatchEvent(ev) {
+  // Bridge before the switch: per-case active-session guards must not block
+  // the extension bus. All received events mirror onto Clacky.ext here.
+  if (window.Clacky && Clacky.ext) {
+    const extName = SESSION_EXT_EVENTS[ev.type];
+    if (extName) {
+      // session_update arrives in two payload shapes: shape (1) from http_server
+      // broadcast_session_update is { type, session: {...} } with no top-level
+      // session_id/status; shape (2) from web_ui_controller emit is flat. The
+      // host-side switch (see `case "session_update"` below) already normalizes
+      // both shapes; mirror that here so extension subscribers see a consistent
+      // sessionId/status regardless of source. The original session object is
+      // preserved via ...ev so shape-aware extensions keep working.
+      let payload = ev;
+      if (ev.type === "session_update" && ev.session) {
+        payload = { ...ev, session_id: ev.session.id, status: ev.session.status };
+      }
+      const sid = payload.session_id || (ev.session && ev.session.id);
+      Clacky.ext.emit(extName, { sessionId: sid, ...payload, session_id: sid });
+    } else if (typeof ev.type === "string" && ev.type.startsWith("ext.")) {
+      // Custom events from UIInterface#emit. The host has no rendering for
+      // these; they exist purely so an extension can observe its own backend.
+      const sid = ev.session_id;
+      Clacky.ext.emit(ev.type, { sessionId: sid, ...ev });
+    }
+  }
+
+  const eventSession = ev.session_id || ev.session?.id;
+  if (eventSession === Sessions.activeId) {
+    if (["history_user_message", "task_finished", "interrupted"].includes(ev.type) ||
+        (ev.type === "session_update" && (ev.status || ev.session))) {
+      window.ChatNavigator?.refresh();
+    }
+    // Keep live output out of a detached historical window. Session status,
+    // notifications and extension delivery above continue normally.
+    const historyOutput = ["history_user_message", "assistant_message", "tool_call", "tool_result",
+      "tool_error", "tool_stdout", "phase_start", "phase_end", "request_feedback", "progress",
+      "complete", "interrupted", "info", "warning", "success", "error", "token_usage"];
+    if (historyOutput.includes(ev.type) && Sessions.deferLiveHistory(ev)) return;
+  }
+
+  switch (ev.type) {
+
+    // ── Phase grouping ─────────────────────────────────────────────────
+    case "phase_start": {
+      if (ev.session_id !== Sessions.activeId) break;
+      _beginPhase(ev);
+      break;
+    }
+
+    case "phase_end": {
+      if (ev.session_id !== Sessions.activeId) break;
+      _endPhase(ev.phase_id, ev.summary);
+      break;
+    }
+
+
+    // ── Internal WS lifecycle ──────────────────────────────────────────
+    case "_ws_connected": {
+      const banner = document.getElementById("offline-banner");
+      if (banner) banner.style.display = "none";
+      const hint = $("ws-disconnect-hint");
+      if (hint) hint.style.display = "none";
+      // WS just reconnected. A todo_update broadcast may have been lost during
+      // the disconnect window (notably the "all completed" empty-array
+      // broadcast that fires when the last task completes). Reconcile the
+      // active session's todos from the authoritative server snapshot so the
+      // panel can never get stuck on a stale state after a WS hiccup.
+      if (Sessions.activeId) Sessions._refreshTodos(Sessions.activeId);
+      break;
+    }
+
+    case "_ws_disconnected": {
+      const banner = document.getElementById("offline-banner");
+      if (banner) {
+        banner.textContent = I18n.t("offline.banner");
+        banner.style.display = "block";
+      }
+      // Do NOT force status bar to "idle" here — on a brief WS hiccup the
+      // agent may still be running, and reconnect will deliver a fresh
+      // session snapshot that patches the real status. Forcing idle here
+      // caused stuck UI after reconnect when the snapshot logic wasn't
+      // re-asserting status on every reconnect.
+      Sessions.clearAllProgress();
+      _closeAllPhases("incomplete");
+      break;
+    }
+
+    // ── Session list ───────────────────────────────────────────────────
+    case "session_list": {
+      Sessions.setAll(ev.sessions || [], !!ev.has_more, ev.groups || {});
+      Projects.setAll(ev.projects || []);
+      Sessions.renderList();
+      Projects.renderSection();
+
+      // Restore URL hash once on initial connect; ignore subsequent session_list events.
+      // Skip if we are already on a session view (e.g. onboard flow navigated there
+      // before WS connected) — restoreFromHash would wrongly redirect to "welcome"
+      // because there is no hash set during onboarding.
+      if (!_initialRestoreDone) {
+        _initialRestoreDone = true;
+        if (Router.current !== "session") {
+          Router.restoreFromHash();
+        }
+      } else {
+        // If active session was deleted, go to welcome
+        if (Sessions.activeId && !Sessions.find(Sessions.activeId)) {
+          Router.navigate("welcome");
+        }
+      }
+      break;
+    }
+
+    // ── Session lifecycle ──────────────────────────────────────────────
+    case "subscribed": {
+      if ($("input-queue")) { $("input-queue").replaceChildren(); $("input-queue").hidden = true; }
+      // Re-enable send button now that the server has confirmed the subscription.
+      $("btn-send").disabled = false;
+      $("user-input").focus();
+      // If this session was created by Tasks.run(), fire the agent now that
+      // we're guaranteed to receive its broadcasts.
+      const pendingId = Sessions.takePendingRunTask();
+      if (pendingId && pendingId === ev.session_id) {
+        WS.send({ type: "run_task", session_id: pendingId });
+      }
+      // If a slash-command was queued (e.g. /onboard from first-boot flow),
+      // send it now — after restoreFromHash has settled — so appendMsg won't be wiped.
+      const pendingMsg = Sessions.takePendingMessage();
+      if (pendingMsg && pendingMsg.session_id === ev.session_id) {
+        const html = pendingMsg.display
+          ? pendingMsg.display
+          : SkillAC.renderUserMessageHtml(pendingMsg.content);
+        Sessions.appendMsg("user", html, { time: new Date() });
+        WS.send({
+          type: "message",
+          session_id: pendingMsg.session_id,
+          content: pendingMsg.content,
+          files: pendingMsg.files || undefined,
+          references: pendingMsg.references || undefined,
+          lang: I18n.lang(),
+        });
+      }
+      break;
+    }
+
+    case "session_update": {
+      // Two shapes arrive under this type:
+      //   (1) Full session object from http_server broadcast_session_update:
+      //       { type, session: { id, name, status, total_cost, total_tasks, ... } }
+      //   (2) Partial real-time update from web_ui_controller (cost/tasks/status):
+      //       { type, session_id, cost?, tasks?, status? }
+      let sid, patch;
+      if (ev.session) {
+        // Shape (1): full session — use as-is
+        sid   = ev.session.id;
+        patch = ev.session;
+      } else {
+        // Shape (2): partial update — build patch from top-level fields
+        sid   = ev.session_id;
+        patch = {};
+        if (ev.cost    !== undefined) patch.total_cost     = ev.cost;
+        if (ev.tasks   !== undefined) patch.total_tasks    = ev.tasks;
+        if (ev.status  !== undefined) patch.status         = ev.status;
+        // Latency pushed by Agent after each LLM call (see update_sessionbar).
+        // Stored under latest_latency — same field name the HTTP /api/sessions
+        // list returns, so updateInfoBar doesn't need to branch on the source.
+        if (ev.latency !== undefined) patch.latest_latency = ev.latency;
+      }
+      if (!sid) break;
+      // A creation update is emitted only after the session's initial metadata
+      // has been persisted. Promote it into the canonical list; ordinary full
+      // snapshots remain patches so reconnects and old-session updates cannot
+      // disturb the pagination boundary.
+      //
+      // Exception: the session the user is currently viewing. It may have been
+      // opened from search / a deep link and live only in the `_extraSessions`
+      // cache (outside the loaded page), which the sidebar does not render —
+      // patching it would leave the list without a row until a reload. A full
+      // snapshot carries every column the list needs, and its fresh
+      // `updated_at` sorts it to the top, exactly where a reload would put it.
+      const listed = Sessions.all.some(s => s.id === sid);
+      if (ev.session && (ev.created || (sid === Sessions.activeId && !listed))) {
+        Sessions.add(ev.session);
+      } else {
+        Sessions.patch(sid, patch);
+      }
+      Sessions.renderList();
+      Projects.renderSection();
+      if (sid === Sessions.activeId) {
+        const current = Sessions.find(sid);
+        if (patch.status !== undefined) Sessions.updateStatusBar(patch.status);
+        Sessions.updateInfoBar(current);
+        // Update chat title/subtitle in case session was renamed or working_dir changed
+        Sessions.updateChatHeader(current);
+      }
+      // When a session finishes, refresh tasks and skills, and clear any progress state
+      if (patch.status === "idle" || patch.status === "awaiting_feedback") {
+        Tasks.load();
+        Skills.load();
+        // Clear progress state for this session (even if not currently active)
+        Sessions.clearProgress(sid);
+        if (patch.status === "idle") Sessions.markDone(sid);
+        Sessions.renderList();
+      }
+      break;
+    }
+
+    // Transient global signal emitted the moment any agent task finishes
+    // (broadcast to every client, not just session subscribers). Used only
+    // to play the optional completion chime; the toggle gates it and the
+    // module decides whether the user is looking at that session.
+    case "task_finished":
+      if (typeof Notify !== "undefined") Notify.onTaskFinished(ev.session_id, ev.awaiting_feedback);
+      break;
+
+    case "session_renamed": {
+      Sessions.patch(ev.session_id, { name: ev.name });
+      Sessions.renderList();
+      Projects.renderSection();
+      // Title is now shown only in the sidebar; chat-header element was removed.
+      break;
+    }
+
+    case "session_deleted":
+      if (window.Clacky && Clacky.ext) Clacky.ext.notifySessionRemoved(ev.session_id);
+      Sessions.remove(ev.session_id);
+      if (ev.session_id === Sessions.activeId) Router.navigate("welcome");
+      Sessions.renderList();
+      Projects.renderSection();
+      break;
+
+    case "session_restored":
+      // A soft-deleted session was restored from the session trash.
+      // Insert it back into the local list (idempotent — Sessions.add no-ops
+      // if the id already exists) and re-render the sidebar.
+      if (ev.session) {
+        Sessions.add(ev.session);
+        Sessions.renderList();
+        Projects.renderSection();
+      }
+      break;
+
+    // ── Chat messages ──────────────────────────────────────────────────
+    case "input_enqueued":
+      if (ev.session_id === Sessions.activeId) Sessions.removeEarliestPendingUserBubble();
+      break;
+
+    case "input_queue_notice":
+      if (ev.session_id === Sessions.activeId) Modal.toast(I18n.t(ev.key));
+      break;
+
+    case "input_behavior":
+      if ($("input-behavior")) $("input-behavior").value = ev.value;
+      Sessions.updateInputBehavior();
+      break;
+
+    case "input_queue": {
+      if (ev.session_id !== Sessions.activeId) break;
+      const panel = $("input-queue");
+      if (!panel) break;
+      panel.replaceChildren();
+      panel.hidden = !ev.entries?.length;
+      for (const entry of ev.entries || []) {
+        const row = document.createElement("div");
+        row.className = "input-queue-row";
+        const body = document.createElement("div");
+        body.className = "input-queue-body";
+        const status = document.createElement("span");
+        status.className = "input-queue-status";
+        status.textContent = I18n.t(entry.delivery === "steer" ? "chat.input.guidancePending" : "chat.input.queued");
+        const label = document.createElement("div");
+        label.className = "input-queue-content";
+        label.textContent = entry.options?.display_text || entry.content || "";
+        label.title = label.textContent;
+        body.append(status, label);
+        const files = (entry.options?.files || []).map(file => file.name).filter(Boolean);
+        if (files.length) {
+          const attachments = document.createElement("div");
+          attachments.className = "input-queue-files";
+          attachments.textContent = files.join(" · ");
+          attachments.title = attachments.textContent;
+          body.append(attachments);
+        }
+        const actions = document.createElement("div");
+        actions.className = "input-queue-actions";
+        function iconButton(key, paths) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "btn-icon-sm";
+          button.title = I18n.t(key);
+          button.setAttribute("aria-label", I18n.t(key));
+          button.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+          return button;
+        }
+        const remove = iconButton("chat.input.removeQueued", '<path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6"/>');
+        remove.classList.add("input-queue-remove");
+        remove.onclick = () => {
+          if (WS.ready) WS.send({ type: "remove_pending_input", session_id: ev.session_id, id: entry.id });
+        };
+        const edit = iconButton("chat.input.editQueued", '<path d="M12 20h9M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/>');
+        edit.onclick = () => {
+          if (row.classList.contains("editing")) return;
+          row.classList.add("editing");
+          actions.hidden = true;
+          const editor = document.createElement("textarea");
+          editor.className = "msg-user-edit-textarea";
+          editor.value = entry.content;
+          editor.setAttribute("aria-label", I18n.t("chat.input.editQueued"));
+          label.replaceWith(editor);
+          const editActions = document.createElement("div");
+          editActions.className = "msg-user-edit-actions";
+          const cancel = document.createElement("button");
+          cancel.type = "button";
+          cancel.className = "msg-user-edit-cancel";
+          cancel.textContent = I18n.t("chat.cancel");
+          const save = document.createElement("button");
+          save.type = "button";
+          save.className = "msg-user-edit-send";
+          save.textContent = I18n.t("chat.input.saveQueued");
+          cancel.onclick = () => {
+            editor.replaceWith(label);
+            editActions.remove();
+            row.classList.remove("editing");
+            actions.hidden = false;
+            edit.focus();
+          };
+          save.onclick = () => {
+            if (WS.ready) WS.send({ type: "edit_pending_input", session_id: ev.session_id, id: entry.id, content: editor.value });
+          };
+          editor.rows = 1;
+          editor.wrap = "off";
+          editor.addEventListener("keydown", event => {
+            if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancel.click(); }
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.isComposing) { event.preventDefault(); save.click(); }
+          });
+          editActions.append(cancel, save);
+          body.append(editActions);
+          editor.focus();
+        };
+        const sendNow = iconButton("chat.input.sendQueued", '<path d="M12 19V5M5 12l7-7 7 7"/>');
+        sendNow.onclick = () => {
+          if (!WS.ready) return;
+          sendNow.disabled = true;
+          status.textContent = I18n.t("chat.input.stopping");
+          WS.send({ type: "send_pending_input", session_id: ev.session_id, id: entry.id, lang: I18n.lang() });
+        };
+        const steering = entry.delivery === "steer";
+        const guide = steering
+          ? iconButton("chat.input.cancelSteerMode", '<path d="M20 12H4M10 6l-6 6 6 6"/>')
+          : iconButton("chat.input.steerMode", '<path d="M4 12h16M14 6l6 6-6 6"/>');
+        // Withdrawing guidance stays available even once the window has closed:
+        // steer_target gates starting guidance, not taking it back.
+        guide.disabled = steering ? false : (!entry.steer_target || entry.content.trimStart().startsWith("/"));
+        guide.title = I18n.t(steering
+          ? "chat.input.cancelSteerDescription"
+          : (entry.steer_target ? "chat.input.steerDescription" : "chat.input.guidanceClosed"));
+        guide.onclick = () => {
+          if (!WS.ready) return;
+          guide.disabled = true;
+          WS.send(steering
+            ? { type: "unsteer_pending_input", session_id: ev.session_id, id: entry.id }
+            : { type: "steer_pending_input", session_id: ev.session_id, id: entry.id, task_id: entry.steer_target });
+        };
+        actions.append(edit, guide, sendNow, remove);
+        row.append(body, actions);
+        panel.append(row);
+      }
+      break;
+    }
+
+    case "history_user_message":
+      if (ev.steering && ev.session_id === Sessions.activeId) {
+        Sessions.appendMsg("user", Sessions.buildUserBubbleHtml(ev), { time: ev.created_at || new Date() });
+      }
+      // Emitted by show_user_message before agent.run; stamp the authoritative
+      // created_at onto the optimistically-rendered bubble and register it in
+      // the dedup set so the subsequent history fetch skips this round.
+      if (ev.session_id === Sessions.activeId && ev.created_at) {
+        Sessions.stampLastUserBubble(ev.created_at);
+      }
+      break;
+
+    case "assistant_message":
+      if (ev.session_id !== Sessions.activeId) break;
+      Sessions.clearProgress();
+      Sessions.appendMsg("assistant", ev.content);
+      if (!ev.phase_id && !ev.interim) window.ChatNavigator?.refresh();
+      break;
+
+    case "tool_call":
+      if (ev.session_id !== Sessions.activeId) break;
+      Sessions.clearProgress();
+      Sessions.appendToolCall(ev.name, ev.args, ev.summary);
+      break;
+
+    case "tool_result":
+      if (ev.session_id !== Sessions.activeId) break;
+      Sessions.appendToolResult(ev.result, ev.ui || null);
+      break;
+
+    case "tool_stdout":
+      if (ev.session_id !== Sessions.activeId) break;
+      Sessions.appendToolStdout(ev.lines);
+      break;
+
+    case "tool_error":
+      if (ev.session_id !== Sessions.activeId) break;
+      Sessions.appendMsg("info", `⚠ Tool error: ${escapeHtml(ev.error)}`);
+      break;
+
+    case "token_usage":
+      if (ev.session_id !== Sessions.activeId) break;
+      Sessions.appendTokenUsage(ev);
+      break;
+
+    case "progress":
+      if (ev.session_id !== Sessions.activeId) break;
+      if (ev.phase === "active" || ev.status === "start") {
+        const progress_type = ev.progress_type || "thinking";
+        const metadata = ev.metadata || {};
+        Sessions.showProgress(ev.message, progress_type, metadata, ev.started_at || null);
+      } else {
+        Sessions.clearProgress(ev.message);
+      }
+      break;
+
+    // ── Todo / task list ──────────────────────────────────────────────
+    case "todo_update":
+      if (ev.session_id !== Sessions.activeId) break;
+      Sessions.updateTodos(ev.todos || []);
+      break;
+
+    case "complete":
+      // The agent may have created/edited files under the working dir; notify
+      // the workspace store so the Files tree reloads on completion.
+      if (typeof Workspace !== "undefined" && Workspace.notifyTaskCompleted) {
+        Workspace.notifyTaskCompleted(ev.session_id);
+      }
+      if (ev.session_id !== Sessions.activeId) break;
+      Sessions.clearProgress();
+      Sessions.collapseToolGroup();
+      _closeAllPhases("incomplete"); // safety net: missed phase_end
+      {
+        const costSource = ev.cost_source;
+        const symbol = typeof Billing !== "undefined" ? Billing.getCurrencySymbol() : "$";
+        const rawCost = ev.cost || 0;
+        const cost = typeof Billing !== "undefined" ? Billing.convertCost(rawCost) : rawCost;
+        const costDisplay = (!costSource || costSource === "estimated")
+          ? "N/A"
+          : `${symbol}${cost.toFixed(4)}`;
+        let mainLine = I18n.t("chat.done", { n: ev.iterations, cost: costDisplay });
+        if (typeof ev.duration === "number" && ev.duration > 0) {
+          mainLine += I18n.t("chat.done.duration", { duration: ev.duration.toFixed(1) });
+        }
+        let cacheLine = null;
+        const cs = ev.cache_stats;
+        const total = cs && (cs.total_requests || cs["total_requests"]);
+        const hits = cs && (cs.cache_hit_requests || cs["cache_hit_requests"]);
+        const cachedTokens = cs && (cs.cache_read_input_tokens || cs["cache_read_input_tokens"]);
+        if (total && total > 0 && cachedTokens && cachedTokens > 0) {
+          const rate = ((hits / total) * 100).toFixed(1);
+          const tokensFmt = cachedTokens >= 1000
+            ? `${(cachedTokens / 1000).toFixed(1)}k`
+            : `${cachedTokens}`;
+          cacheLine = I18n.t("chat.done.cache", {
+            rate, hits, total: total, tokens: tokensFmt
+          });
+        }
+        Sessions.appendInfo(`✓ ${mainLine}`, cacheLine);
+      }
+      if (typeof Share !== "undefined") Share.maybePromptOnComplete();
+      break;
+
+    case "request_feedback":
+      if (ev.session_id !== Sessions.activeId) break;
+      Sessions.showFeedbackRequest(ev.question, ev.context, ev.options, ev.questions);
+      break;
+
+    case "request_confirmation":
+      if (ev.session_id !== Sessions.activeId) break;
+      showConfirmModal(ev.id, ev.message);
+      break;
+
+    case "interrupted":
+      if (ev.session_id !== Sessions.activeId) break;
+      Sessions.clearProgress();
+      Sessions.collapseToolGroup();
+      _closeAllPhases("incomplete");
+      if (ev.reason !== "replacement") {
+        Sessions.appendMsg("stopped", escapeHtml(I18n.t("chat.interrupted")));
+      }
+      break;
+
+    // ── Info / errors ──────────────────────────────────────────────────
+    case "info":
+      Sessions.appendInfo(ev.message);
+      break;
+
+    case "warning":
+      // Optimize retry messages for better UX
+      const friendlyWarning = _transformRetryWarning(ev.message);
+      if (friendlyWarning) {
+        Sessions.appendInfo(friendlyWarning);
+      }
+      break;
+
+    case "success":
+      Sessions.appendMsg("success", "✓ " + escapeHtml(ev.message));
+      break;
+
+    case "error":
+      if (!ev.session_id || ev.session_id === Sessions.activeId) {
+        renderErrorEvent(ev);
+      }
+      break;
+
+    // ── UI control signals ─────────────────────────────────────────────
+    case "open_aside":
+      // Triggered by the AI (via POST /api/ui/open_aside) after building an
+      // extension whose panel lives in the right-side aside column.
+      if (window.Clacky && Clacky.Aside) Clacky.Aside.open();
+      break;
+
+    case "show_ext_refresh":
+      // Triggered by the AI (via POST /api/ui/show_ext_refresh) after it edits
+      // extension files, so the user can reload extensions with one click.
+      _appendExtRefreshHint();
+      break;
+
+  }
+}
+
+// ── Ext-developer refresh hint ─────────────────────────────────────────────
+// Appended after a completed ext-developer session so the user can reload
+// extensions with one click instead of doing a manual page refresh.
+
+function _appendExtRefreshHint() {
+  const messages = RenderTarget.current();
+  if (!messages) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "msg msg-ext-refresh-hint";
+
+  const btn = document.createElement("button");
+  btn.className = "btn-ext-refresh";
+  btn.innerHTML =
+    `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">` +
+    `<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>` +
+    `<path d="M21 3v5h-5"/>` +
+    `<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>` +
+    `<path d="M8 16H3v5"/>` +
+    `</svg>` +
+    `<span>${I18n.t("ext.refresh_hint")}</span>`;
+  btn.onclick = () => {
+    if (window.Clacky && Clacky.ext && typeof Clacky.ext.reload === "function") {
+      Clacky.ext.reload();
+    } else {
+      location.reload();
+    }
+    btn.disabled = true;
+    btn.style.opacity = "0.5";
+  };
+
+  wrap.appendChild(btn);
+  messages.appendChild(wrap);
+
+  // Scroll into view
+  messages.scrollTop = messages.scrollHeight;
+}
+
+
+
+function _transformRetryWarning(message) {
+  return message;
+}
+
+// ── Error rendering ────────────────────────────────────────────────────────
+
+function renderErrorEvent(ev) {
+  const topUp = ev.top_up_url
+    ? `<a class="error-action-btn" href="${escapeHtml(ev.top_up_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(I18n.t("error.insufficient_credit.action"))}</a>`
+    : "";
+  if (ev.code === "insufficient_credit") {
+    const body = escapeHtml(I18n.t("error.insufficient_credit"));
+    Sessions.appendMsg("error", `<span>${body}</span>${topUp}${_buildRawDetail(ev.raw_message)}`);
+    return;
+  }
+  if (ev.code === "model_not_allowed") {
+    Sessions.appendMsg("error", `<span>${escapeHtml(ev.message)}</span>${topUp}${_buildRawDetail(ev.raw_message)}`);
+    return;
+  }
+  Sessions.appendMsg("error", escapeHtml(ev.message) + _buildRawDetail(ev.raw_message));
+}
+
+function _buildRawDetail(raw) {
+  if (!raw) return "";
+  return `<details class="error-raw-detail"><summary>${escapeHtml(I18n.t("error.show_detail"))}</summary><pre>${escapeHtml(raw)}</pre></details>`;
+}
+
+window.renderErrorEvent = renderErrorEvent;
+
+
+})();

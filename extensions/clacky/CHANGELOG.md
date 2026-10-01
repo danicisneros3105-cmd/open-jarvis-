@@ -1,0 +1,2773 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+
+## [1.5.17] - 2026-09-30
+
+### Added
+- Show a top-up action when a free-trial model rejects the request
+- Add Requesty as a named provider preset (#587 - @Thibaultjaigu)
+- Redesign the skills page around cards and a detail view
+- Redesign the scheduled tasks page and keep a run history per task
+- Redesign the channels page as a compact two-column list
+- Rework the MCP page layout, its row menu and the remove confirmation
+- Add "Add to chat" to the workspace file context menu
+- Add a global switch for IM progress cards (#599)
+- Show the vendor logo on the model chip of a new session
+- Use Chinese names for the built-in skills
+
+### Improved
+- Optimize the Feishu card styling (#597)
+- Improve drag-and-drop for session references and files (#600)
+- Restyle the channel status badge, cron rows, message settings and search boxes
+- Polish the assistant memory page, onboarding page, billing header and trash toolbar
+- Improve the discoverability of overflowing aside tabs (#601)
+- Show skill, MCP and task errors as in-app toasts instead of browser alerts
+- Localize the default extension icon letter
+- Ship meeting as a default-off extension
+
+### Fixed
+- Make an IM message interrupt the running task instead of queueing silently (#586)
+- Hide the sidecar models from the model switchers (#598)
+- Show the "View process" panel in Feishu only when there is process history (#596)
+- Keep a subagent phase running when a message is queued (#594)
+- Fix the skill install click and the extension installed state
+- Strip channel-only prompt prefixes when replaying history (#585)
+- Use the in-app dialog for delete confirmations instead of the browser prompt
+- Toggle a sidebar ··· menu on a repeated click (#595)
+- Hide the auto tag and routing tooltip once the alias is pinned to a model
+
+### More
+- Retire Claude 4.5 / Opus 4.6 and Gemini 3.5 / 3.6 Flash from the catalogs
+- Remove legacy fallback domains and dead failover paths
+
+## [1.5.16] - 2026-09-24
+
+### Added
+- Add Claude Opus 5.5 and GPT-6 Sol/Luna to the model catalog
+- Send task progress cards in Feishu, with collapsible process history (#582)
+- Print a receipt-style usage scorecard from the billing page and share it as an image
+- Understand video attachments through a sidecar model (#564)
+- Open the app straight into a chat from an external clacky:// link, including the welcome view
+- Route requests automatically: the auto alias picks a tier per request and reports which tier served it (#576)
+- Drive the Windows desktop through WSL in computer-use
+- Ship computer-use as a default-off extension
+- Let on_start hooks veto a turn before the agent starts (#573 - @afumu)
+- Cap the memory and CPU of a task's shells and browser daemons on Linux hosts with --task-cgroup
+- Refuse to start on a taken port instead of silently moving to another one, with --strict-port
+- Keep attachment paths when a compressed history chunk is replayed (#581 - @BoyYangzai)
+- Point generated skills at their own directory through an inlined skill_dir
+
+### Improved
+- Restyle the web search result card (#575)
+- Use official brand marks for model vendor badges (#566)
+- Refresh the supported model catalogs and pricing (#571)
+- Rename the extension group label User to Personal
+- Adjust the session title size and unify the sidebar active highlight
+- Soften the extension row action buttons and tighten the segmented control corners
+
+### Fixed
+- Keep queued guidance attached to the message it was sent from, and allow cancelling it (#584, #578)
+- Stop treating a pasted path as a slash command (#577)
+- Restore structured tool result cards when a session history is replayed (#574)
+- Stop duplicating user bubbles after an edit (#568)
+- Show attachment badges in realtime user bubbles (#567)
+- Transcribe audio attachments through the STT sidecar (#565)
+- Preserve a quote selection while a live update streams in (#569)
+- Load per-key platform usage in parallel in the billing view (#580)
+- Prevent subagents from publishing input queues (#570 - @afumu)
+- Block model switching while a session is running instead of racing the running turn
+- Hand binary files back to the OS when they are reopened
+- Report the doctor host before resolving the backend
+- Stop the DeepSeek preset from showing a version suffix
+
+## [1.5.15] - 2026-09-17
+
+### Added
+- Quote text selected in a message and send it as a reference badge
+- Queue messages while the agent is working, with pending-message controls in the CLI and Web UI (#561)
+- Steer a running turn with a queued message
+- Discover custom-endpoint models from the add-model dialog (#560 - @kylezhang)
+- Show vendor badges for each provider in the add-model dropdown
+- Label every model with its provider in the model picker
+- Open unviewable files in the system app and reveal them in the workspace tree
+- Follow the browsed directory in the directory picker sidebar
+- Show the extension and skill lists as segmented tabs in Extension Studio
+- Add disclosure carets to the clickable status-bar fields
+- Resolve redirected Windows shell folders in the WSL directory picker
+- Show web search results as UI results in the chat
+
+### Improved
+- Swap the extension and channel management order in the sidebar
+- Rename the Tasks sidebar entry to Scheduled Tasks
+- Improve mobile folder navigation in the directory picker (#549)
+- Improve the mobile layout of settings tabs and model controls (#548)
+- Add a global focus ring for keyboard navigation (#544)
+- Align the input behavior toggle with the send buttons
+- Deepen the directory-picker breadcrumb field
+- Keep the segmented control highlight dark on the dim and bluedark themes
+- Retire the dsk-deepseek-v4-flash model ids
+
+### Fixed
+- Keep the mobile composer above the soft keyboard (#557)
+- Install newly published brand skills when an agent starts
+- Show the marketplace takedown state instead of an unusable unpublish button
+- Show complete brand distribution for brand owners (#556)
+- Focus brand owners on brand publishing in Extension Studio (#555)
+- Hide the creator center from branded non-owners (#553)
+- Forward brand marketplace sorting to the backend (#552)
+- Complete the public session creation lifecycle (#551)
+- Make the @ mention menu selectable on the new-session page (#558)
+- Show a searched old session in the sidebar without a reload
+- Stop session updated_at from rolling back on save
+- Avoid a duplicated empty state in the sidebar search
+- Align reasoning and image fields with the Responses API schema
+- Use theme tokens for the badge colors
+- Give the calendar popup its own class namespace
+- Add the default user prompt for attachments
+
+## [1.5.14] - 2026-09-10
+
+### Added
+- Add a click-driven live preview panel for workspace files and localhost dev servers
+- Open local files in the preview panel via file:// URLs and bare absolute paths
+- Add GPT-5.6 Sol/Terra/Luna and GPT-6 Astra models with Global CRIS pricing
+- Add the deepseek-flash model
+- Add an editable Chinese metadata form and field-level frontmatter update API for skills
+- Add a /think reasoning-effort switcher to the TUI
+- Render CSV/TSV files as read-only tables in the workspace
+- Add Parallel Free as the primary built-in web-search provider
+- Select text in a message and quote it into the composer (#526 - @kylezhang)
+- Syntax-highlight code in the file viewer
+- Send large STT audio as base64 JSON (#525 - @tomash)
+- Add a Files panel open-with menu, tree toggle, split preview, and in-menu download
+- Detect Windows apps for open-with in WSL
+- Skip registering the browser tool when it is disabled
+- Auto-snapshot the page after browser actions
+- Truncate long working directories in the session info bar
+- Highlight width-drag handles on hover
+
+### Improved
+- Switch the default model to Gemini 3.8 Flash
+- Use single-pane navigation on mobile (C-5779) (#539)
+- Polish the chat navigator layout and hover interactions (#527)
+- Improve message navigation in long conversations (#523)
+- Refine the billing tooltip UX (C-5778) (#537)
+- Let the git panel fill the aside height and free up diff width (#531)
+
+### Fixed
+- Restore the aside width after closing file previews (#545)
+- Replace undefined danger tokens with the error color variable (#542 - @sundevilyang)
+- Add hover and disabled feedback to danger and secondary buttons (#541, #540 - @sundevilyang)
+- Correct DeepSeek v4-pro and flash pricing
+- Collapse extension actions into a menu on narrow screens (C-5781) (#538)
+- Don't submit argumented commands on Enter
+- Scroll overflow menus and pin config action buttons
+- Sniff binary content before text preview (C-5690) (#535)
+- Require a slash prefix for channel help commands (C-5641) (#533)
+- Normalize the homepage URL scheme on read (C-5666) (#534)
+- Decode non-ASCII paths in git panel output (C-5777) (#530)
+- Refresh the file tree on working-dir switch and task completion
+- Harden extension developer guidance and manifest validation (#524)
+- Fix zip file encoding errors
+- Resolve file://~/ tilde paths from chat links
+- Align the open-button icon
+
+### More
+- Move the preview tab to the end of the left-nav order
+- Extract provider id constants to replace magic strings
+
+## [1.5.13] - 2026-09-03
+
+### Added
+- Add Gemini 3.8 Flash model and set it as the trial default
+- Add or-stt-gemini-3-8-flash speech-to-text model; default STT and video understanding to 3.8
+- Add OpenAI Responses API as a fourth API format (#490 - @kylezhang)
+- Add access-key API and config-reload API
+- Add Claude Fable 5.1, GLM-5.3-Flash and qwen3.8-max models with pricing
+- Default the Web UI to the OS/browser language on first visit
+- Make the workspace file tree resizable
+- Expose mounted drives in the directory picker
+- Personalize the new-session page title and empty-chat greeting with the AI's name
+- Localise built-in setup session titles
+
+### Improved
+- Replace native selects with shared CustomSelect dropdowns across settings
+- Overhaul the git & time-machine panel
+- Improve the directory picker (#521)
+
+### Fixed
+- Merge OpenClacky billing across all configured API keys
+- Preserve custom provider and API format when editing a model
+- Reclaim PTY file descriptors when a session shell dies
+- Wrap ANSI-coloured CJK text without IndexError
+- Prevent history edits while a session is running (#520)
+- Preserve attachment badges after compression (#516)
+- Flag hidden agents instead of dropping them
+- Install upgrades next to the running gem's base directory
+- Skip extension auto-sync for administrators (#515)
+- Support the mention menu with Windows IME (#513)
+- Validate extension version input (#514)
+- Keep mention chips anchored and on one line while typing
+- Fall back to uncolored markdown for CJK tables
+- Stabilise billing toolbar layout (#517)
+- Light the group unread dot for backend-created sessions (#518)
+- Translate maximum reasoning effort (#522)
+- Harden WSL Windows profile detection in the directory picker
+- Wrap download errors so the CDN fallback fires
+- Surface the git tab badge eagerly
+- Show the meeting panel only in general sessions
+- Whitelist the config top-level key in the extension verifier
+
+### More
+- Extract shared ModelPicker model dropdown component
+- Refine dropdown chevrons and submenu selection
+- Adjust sidebar panel order and labels
+- Update trial model copy to Gemini 3.7 Flash
+
+## [1.5.12] - 2026-08-27
+
+### Added
+- Add VS Code-style file tree with inline file viewer
+- Add quick-access sidebar for directory picker with WSL support
+- Add Web UI @mention references for files, directories and sessions
+- Add Gemini 3.7 Flash model with STT/video support; switch OCR default to DeepSeek vision
+- Add timestamps to assistant messages
+- Merge platform usage API data with local billing records
+- Refresh git panel on session completion
+- Allow disabling local extensions
+- Expose task mappings in core events (#496 - @YeEmrick)
+
+### Improved
+- Move file-trash sweep off the session save path and speed up session creation
+- Make recharge link a visible button on model cards
+
+### Fixed
+- Fix ask_user free-text input: render without options, guard IME composition, route Enter, render as text in IM channels, keep questions concise (#497 - @afumu)
+- Fix advisor recommendations: send structured options, keep card state per session, dismiss button no longer permanently suppresses
+- Fix home favorite pointing at the Windows profile under WSL
+- Fix session list pagination and pin truncation
+- Preserve task ids in compressed history (#500 - @YeEmrick)
+- Clear stale media model override when reverting to auto
+- Normalize gemini-3.7-flash name for pricing
+- Fix sidebar scrollbar visibility and session list styling
+- Fix messages loading created_at
+- Render parallel fan-out subagent phases as flat, isolated cards
+- Preserve subagent transcripts when an interrupted fan-out is resumed
+- Fix spinner in subagent raise process
+- Truncate messages carrying the system_injected flag
+- Stop reporting awaiting_feedback for question-mark endings
+- Detach channel_ui and keep channel_info unique on /bind and /unbind
+
+## [1.5.11] - 2026-08-23
+
+### Added
+- Creator Studio: separate Marketplace and Brand sections for published extensions
+- Advisor extension for next-job suggestions
+- ask_user tool with multi-question support (replaces feedback_user)
+- Sidebar states for awaiting-feedback and just-finished sessions
+- Auto-purge file-trash entries older than 8 days
+- DeepSeek V4 flash vision exp model preset
+- IM channel toggle to mute tool-call narration and previews
+
+### Improved
+- Unified internal thread management with graceful shutdown
+
+### Fixed
+- Skill decrypt retry now picks up a renewed license key
+- DeepSeek weekends billed entirely at off-peak rates
+- Skill and extension zip downloads fall back to a secondary CDN host
+- Session status dot aligned with name and channel badge
+- Project session tag top margin
+- Unified modal close button and ext-studio modal semantics
+- Unified checkbox accent and distinct verified badge
+- Edit-model modal overflow on small screens
+- Subagent UI fixes
+- Star History charts migrated to star-history.dera.page (#491 - @CrustyMozarella)
+
+## [1.5.10] - 2026-08-19
+
+### Added
+- Import extensions from a local zip file
+- Per-model API format override (#484 - @kylezhang)
+- Project pinning (pin to top)
+- Copy Session ID action in session menu
+- Price ratio on model switcher panel
+- Model search filter and provider filter dropdown in settings
+- Remark field for model configs
+- Custom vision model config
+- GPT-5.6 Sol/Terra/Luna presets and pricing
+- GLM-5.3 model support
+- Global IM status-messages toggle (default off)
+- Extension-defined tools support; extensions can disable skills
+- Server restart state and HTTP restart flag
+- Actionable web search provider errors
+- Localized display names for broadcast skill commands
+
+### Improved
+- Skill autocomplete dropdown UI with localized source labels
+- Skill auto-creation and evolution reporting refinements
+
+### Fixed
+- MCP: preserve CRLF pairs split across SSE chunk boundaries (#489 - @MohammedAlkindi)
+- Feishu: auto-refresh token and retry when revoked (99991663) (#483 - @chengoak)
+- Preserve head+tail for oversized terminal output (#455 - @shipinliang)
+- openclacky start failed when no TTY
+- Capture master/worker crash logs under LaunchAgent
+- ReferenceError in model modal _syncRemarkField
+- Remark field always visible in model modal
+- api_format field only shown for custom providers and validated before mutating model config
+- Media gen output dir handling
+
+## [1.5.9] - 2026-08-14
+
+### Added
+- OrcaRouter as a named provider preset (#480 - @Marc-oss-hub)
+- DeepSeek peak/off-peak billing support
+- Unicode homoglyph-tolerant string matching in edit mode
+- Load-more pagination in extension marketplace
+- Remove-from-project action in session menu
+- Move-to-project submenu in session actions menu
+- Changelog link in version badge and upgrade popover
+- ext-studio scaffolding generates a runnable test/handler_test.rb and promotes "write tests" to its own step
+- Lucide SVG icons for cron and extension group icons
+
+### Improved
+- Skill "use" button themed with accent color
+- Reordered provider presets list
+- Replaced native confirm() with a Modal component and refreshed aside icons
+- Billing sidebar icon switched to circle-dollar-sign
+- Settings data tab renamed to backup management
+- Refined project session group indentation and hover styling
+
+### Fixed
+- Scroll to top when entering a session group sub-view
+- Zhipu AI website_url now points to the console overview page
+- WSL path translation and CRLF line-ending preservation (#454 - @shipinliang)
+- Project sessions re-render on language switch
+- Corrected arrow direction for move-in/move-out project icons
+- Attachment drafts isolated per session (#478)
+- Pinned sessions prioritized in project session lists
+- Projects.all() returns a sorted list
+- Builtin extension skills classified as system and hidden third-party ext skills from the panel
+- Feishu WebSocket TLS SNI (#479 - @ayers-ltd)
+- stop_reason mapping expanded from 3 to 8 cases (#469 - @shipinliang)
+
+### More
+- Shortened ext-developer title
+- cmdbar hover and session group indent tweaks
+
+## [1.5.8] - 2026-08-12
+
+### Added
+- Inline SVG icons (edit, clear sessions, delete) in project action menu (#474)
+- New project button in project selector popover
+- Verified badge for officially reviewed extensions in marketplace
+
+### Improved
+- Skip full session/file scan when count is under cap (#470 - @shipinliang)
+- Token estimation uses count() instead of scan().length (#471 - @shipinliang)
+- Faster server startup
+- Brand user extension UI (non-admin publish button grayed out, unverified banner hidden)
+- Sidebar my-data section icons refreshed
+- Section chevron icon size increased from 11px to 13px
+- Project sidebar hover effects, folder default hints, project icon sizing
+- Billing UI cleanup and global theme color adjustment
+- Section header font and project group spacing tweaks
+- Project menu labels updated
+- Billing disclaimer about provider billing
+
+### Fixed
+- Extension pack max zip size increased from 50 MB to 80 MB
+- New session button in project area now correctly preselects the project
+- Chat navigation popup no longer overlaps sidebar collapse button
+- Sub-model config preserved when switching modes (auto/off/custom)
+- minimax-m2.7 vision detection fixed
+- Project icon no longer reverts to default after page refresh
+- Load constant warning fixed
+
+### More
+- README cost table formatting normalized
+- Ambiguous cost phrasing clarified across READMEs (#475 - @chengoak)
+
+## [1.5.7] - 2026-08-10
+
+### Added
+- Gemini 3.6 Flash model support
+- OAuth for remote MCP HTTP servers (#456 - @sengmitnick)
+- Parallel subagents, extension event bus, and collapsible phase UI
+- Delete sessions action in project menu
+- Extension sessions grouped by source instead of hidden flag (#448)
+- Hook agent
+
+### Improved
+- Hide todo panel when only single task exists
+- Simplify CLI memory updater output
+- Redesign web search settings UI with unified dropdown icons
+
+### Fixed
+- New session inherits project working directory instead of falling back to global default (#468 - @kylezhang)
+- Client retry: replace undefined Clacky::Error with RetryableError on retry (#460 - @shipinliang)
+- Guard against nil tool parameters when formatting definitions (#461 - @shipinliang)
+- Double-serialization of tool call arguments with schema-aware fix (#457 - @shipinliang)
+- Project-scoped cron sessions now show in project area, not cron group
+- Project sidebar now shows newly created session immediately
+- Ruby 2.6 compatibility: replace 3.0+ syntax and pin parallel_tests
+- Token provider Anthropic usage reporting fixes
+- Fix chunk JSON handling
+
+## [1.5.6] - 2026-08-08
+
+### Added
+- Pluggable web_search providers - drop a script into ~/.clacky/searchers/ to use Tavily, Brave, Serper, or any search API instead of DuckDuckGo/Bing scrapers; built-in engines stay as fallback
+- /goal command - Ralph-style standing goal loop with judge-driven auto-continuation
+- Right-edge chat navigator with hover preview and click-to-jump
+- Project edit modal replaces inline rename
+- Installed tab and hidden Market tab for brand users in extensions panel
+- ext-studio publish-to-brand flow with success toast
+- Todo panel with SVG icons and repositioned layout (#437 - @shipinliang)
+- Skill autocomplete with MRU sorting and constant-managed localStorage keys
+- Completion token billing-cell output style
+- Expose project_manager and project_id to extensions (#444)
+
+### Improved
+- Creator Center UI copy and button naming unified
+- Sessions list page size reduced to 10 for faster loading
+- Load-more sessions button styling refined
+
+### Fixed
+- Pagination cursor pollution and premature cron entry display in sessions list
+- updated_at default flipped to preserve instead of refresh
+- Extension packs now exclude gitignored and VCS files
+- Brand logo flash before load
+- SKILL_AC_SHOW_SYSTEM_KEY ReferenceError in skills store
+- Ruby 3.0+ endless method syntax replaced for Ruby 2.6 compatibility
+- session_update bridge shape normalized and ext-workspace teardown captured (#436 - @sundevilyang)
+
+### More
+- Retire doubao-seed-2.0-pro and doubao-seed-2.0-code models
+- Enforce 50MB size limit on extension pack output
+
+## [1.5.5] - 2026-08-04
+
+### Added
+- Ollama (Cloud) provider preset — connect to self-hosted Ollama instances with one click
+- Extension WebSocket bridge — extensions can now subscribe to session events via `Clacky.ext` bus
+- Hidden field support for extension agent profiles
+- Max reasoning effort level beyond `xhigh` (supports `max` tier)
+- Smart terminal output truncation — keeps head and tail of long output instead of cutting at the end
+- Time machine panel now attached to all views
+- Persist sort and installed filter selection across sessions in extensions panel
+- New extension button added to extensions management page header
+- Auto cleanup of trash sessions after 7 days
+
+### Improved
+- Extensions panel redesigned with system/market tabs and toggle switch
+- New-session page: replaced advanced modal with inline context bar chips; agents refresh on open with localized badges, ordered by most-recently-used
+- Overflow tooltip shown on truncated skill descriptions
+- Compression: idle and threshold switches are now separate controls
+- Extension install is now async with progress polling
+
+### Fixed
+- Ollama base URL corrected from `/api` to root domain
+- Extension WebSocket bridge included `hidden` field in verifier AGENT_KEYS
+- User message files render immediately in Web UI; local disk images proxied correctly
+- Sidebar visibility persisted across page reloads
+- Brand logo injected server-side to eliminate flash on load
+- Extension uninstall 404 resolved by normalizing slug field
+- Extension homepage link color variable corrected
+- `request_user_feedback` skill uses structured JSON example to avoid literal `\n` in output
+- `create_session` in extensions now broadcasts session update correctly
+
+## [1.5.4] - 2026-08-01
+
+### Added
+- Project management: create, manage, and switch between projects
+- Claude Sonnet 5 and Opus 5 models with pricing
+- Desktop notifications for background task completion
+- Configurable platform source and branding restoration
+- Hidden flag on create_session API (#403)
+- MiniMax preset refreshed with Anthropic endpoints, M3 thinking, and current lineup (#402)
+
+### Improved
+- File upload size limit increased from 32 MB to 300 MB
+- Dir picker UX: breadcrumb overflow scroll, row spacing, and padding
+- Session-sidebar collapse button appearance matches opener button
+
+### Fixed
+- XLSX parser switched to Python/openpyxl with 60s timeout kill for reliable parsing (C-5656)
+- Panel agents map missing general profile on first load
+- Stale result on first load due to container extension script execution order
+- Page now reloads after deleting local extension in ext-studio
+- Accent color used for extensions filter tab active underline
+- Missing pricing for Claude Sonnet 5 and Opus 5
+- Docker image builds from source and publishes to GHCR on version tags
+- Session list page size reduced from 20 to 15 for better performance
+- MiniMax-M2.5 restored, default base_url reverted to mainland
+
+## [1.5.3] - 2026-07-28
+
+### Added
+- Per-model max output token limits (MODEL_MAX_OUTPUT) applied automatically when sending requests
+- GLM-5.2 added to preset model lineup with pricing table
+- MiMo-V2.5 thinking mode support with max_completion_tokens
+- reasoning_effort mapped to GLM thinking mode and Kimi-K3 thinking levels
+- File-tree save support added to CodeEditor with markdown split-preview panel
+- Unlisted badge and source=brand routing for brand-private extensions
+
+### Improved
+- Markdown preview styles refined: hr, inline images, tables, modal sizing
+- OpenAI client refactored with token_field_for and apply_reasoning_params helpers
+
+### Fixed
+- URL fallback state (base URL) now resets correctly when switching models in quick switch
+- Kimi K3 now uses correct thinking:{type:'enabled'} format for Anthropic client
+- MiMo preset aligned with V2.5 lineup and Token Plan endpoint
+- ext-studio sessions no longer incorrectly tagged as setup sessions (C-5722)
+- localhost URLs no longer trigger OpenClacky failover (find_by_base_url guard)
+- API key toggle icon default and click states corrected
+- Share button on billing page now uses SVG icon instead of emoji
+- Share button hover border color uses accent-primary token
+
+## [1.5.2] - 2026-07-27
+
+### Added
+- Starter prompts for ext-developer agent on new session page
+- Secondary gateway endpoint for OpenClacky provider with auto-fallback after all retries exhausted
+- Subagent save support and invoke_skill format improvements
+
+### Improved
+- Curly quotes wrapping for starter prompt text
+- Brand license badge now distinguishes unreachable vs expiring states
+
+### Fixed
+- HTTP 429 quota_exceeded now shows correct "quota exceeded" error instead of "rate limit" and stops retrying
+- Search query filter now applies correctly to brand extensions in marketplace
+- Billing page colors unified to warm palette
+- Sub-model switching and card display now use saved provider_id correctly
+- Device revoked error message now includes 15-minute wait hint
+- Extension detail page routes by source param for brand/public distinction
+- Non-slug skill names preserved as name_zh fallback for Chinese matching
+- Sudo and .env writes unblocked in subagent; double-compression skipped
+- Claude tool call ID handling fixed
+- Brand skill preserved when auto-update download fails (C-5754)
+- Extension packing rejected when folder name diverges from ext.yml id (C-5752)
+
+## [1.5.1] - 2026-07-24
+
+### Fixed
+- Extension marketplace detail page now opens correctly for brand users when clicking public extensions
+- Uninstall script now properly removes all installed openclacky gem versions
+
+## [1.5.0] - 2026-07-23
+
+### Added
+- Volcengine Ark (Doubao) provider with endpoint-aware model-id mapping
+- Brand tab in extension marketplace for brand-private extensions
+- Auto-install all brand skills on license activation
+- Multi-background theme support with refactored theme engine
+- Short hash suffix in session-info-bar session file label with tooltips
+- Guide ext-develop skill to the host-API reference
+
+### Improved
+- Ext-developer skill prompt updated with engineering discipline guidelines
+- ext-develop skill merged into a single consolidated guide
+- Brand status fetch moved from view layer to store (cleaner architecture)
+- README check prompted before publishing extension
+- MCP page copy updated (removed Clacky brand name)
+- Floating window border effect added to content area
+
+### Fixed
+- CRLF normalization in SSE chunks for servers sending `\r\n\r\n` event separators
+- Subagent tool-item completion with DOM fallback when element not yet in DOM
+- AgentError now carries raw_message for LLM network/timeout errors
+- Extension data persisted outside package dir (C-5729)
+- Idle compression worker shutdown before process exit
+- Install button shown for all extension origins when download_url is present
+
+## [1.4.1] - 2026-07-20
+
+### Added
+- Extension README edit/validate flow and screenshot upload in ext-studio publish
+- Kimi k3 and k2.7-code models added to Kimi preset
+- New session split-button with improved styling
+- Rename-on-name-conflict flow in ext-studio publish
+- Skip OpenClacky AI Keys card for branded onboarding
+
+### Improved
+- Secondary API host added with reduced failover latency
+- Extensions default sort changed to most-installed (downloads first)
+
+### Fixed
+- WSL file panel "Copy Path" now copies Windows-accessible UNC path via `wslpath` (C-5693)
+- Edit button hidden on compressed user messages archived to chunk (C-5723)
+- Message-edit Enter key blocked during IME composition (C-5742)
+- Markdown images with `file://~/` tilde paths now render correctly (C-5747)
+- Local `file://` path resolution unified for Windows drive letters (C-5746, C-5708)
+- Brand extension installs under its real ID, not as unpacked (C-5735)
+- Backup success status no longer stays displayed forever (C-5711)
+- `grep` tool defaults to recursive behavior
+- `display_name` fields included in installed extensions API response
+- Published list reloads after setup entry point and publish
+- Unpublish button size matches iterate button in ext-studio
+- `device_token` correctly passed in screenshot upload multipart fields
+- MCP tool list rendering fixed and display styling improved
+- Uninstall script now removes all openclacky gem versions
+
+## [1.4.0] - 2026-07-14
+
+### Added
+- Volcengine Ark Seedance video generation provider (async submit + poll)
+- Entry points config and extension info editing in ext-studio
+- Search box in skills panel tab bar
+- Default letter gradient icon for extensions without a custom icon
+- Skeleton loading for published extensions list in ext-studio
+
+### Improved
+- Extensions market renders `display_name` instead of raw slug
+- ext-studio extension picker and cards show display name; unit tags aggregated by type
+- Session list "Today / Yesterday" labels localized
+
+### Fixed
+- Terminal Pass 1 echo-strip no longer swallows real output (C-5701)
+- OS metadata files (`.DS_Store`, `__MACOSX`) excluded from packed extension zips (C-5728)
+- TUI exit now restores original terminal settings via `stty` (C-5724)
+- Local image cache busted with mtime version param when file is overwritten (C-5703)
+- Generated media usage correctly associated with sessions (C-5739)
+- Mobile header search action alignment (C-5733)
+- Session search shortcut hint adapted for web (C-5734)
+- Memory card expand button height aligned with other action buttons
+- Billing model filter select styling improved
+- Modal overlay click-to-close disabled (prevents accidental dismissal)
+- Version number / date separator added in extension version history
+- All users can now publish extensions (permission gate removed)
+- Invalid extension version format shows inline error in publish modal
+- Brand update button hover color uses correct CSS variable
+
+## [1.3.11] - 2026-07-12
+
+### Added
+- Delete button for unpublished local extensions in ext-studio
+- Extension install count shown in marketplace
+- Update badge and installed version shown in marketplace list
+
+### Improved
+- Extension version history styled with markdown rendering
+
+### Fixed
+- Preserve user data on extension update (overwrite instead of replace)
+- Extension install timeout increased to 300s (was too short for large extensions)
+- Installed tab search and loading state in extension store
+- Prevent license loss from non-atomic brand.yml writes
+- Extension detail page content no longer cut off or unscrollable
+- Extension author label position corrected to end of title row
+
+## [1.3.10] - 2026-07-09
+
+### Added
+- Extension author shown inline in title row on extension cards
+- Version input in publish modal — writes back to `ext.yml`, shows friendly Chinese error on version conflict
+- Local extensions now included in the installed extensions list
+
+### Improved
+- Published extensions list in publish panel — better style and UX
+- Publishing state, success label, and done button added to publish modal flow
+- OSS CDN prioritized for latest version check (faster upgrade detection)
+
+### Fixed
+- Agent card description clamped to 2 lines; author hidden for built-in agents
+- New-session scrollbar centering — use padding calc instead of max-width
+- `file://` links with spaces and non-ASCII paths now render correctly (#350)
+- Invalid API key error message improved to cover expired key case
+- Local extension card in ext-studio now correctly appends action buttons
+- Navigate back to list when extension detail fails to load
+- Page reloads correctly after install/enable/disable/uninstall extension
+- Enriched installed extensions with market data; shows unlisted badge
+
+## [1.3.9] - 2026-07-08
+
+### Added
+- Installed filter tab in extension marketplace toolbar — quickly view only installed extensions
+- Extension detail page UI improvements with better uninstall behavior
+- `send_data` helper for API extensions to return binary file responses
+
+### Improved
+- Extension marketplace upload flow reworked — `origin` field removed, cleaner package structure
+- Publish modal redesigned with meta block, improved layout, size, and animation
+- Debug panel verify result now shown inline in action bar with auto-hide and friendly hint
+
+### Fixed
+- Zero-byte zip download when exporting extensions — binary responses now handled correctly
+- Filter tab bottom padding adjusted for better underline spacing
+- New-session advanced panel margin-top adjusted
+- Debug panel detail no longer shows origin field
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.3.8] - 2026-07-07
+
+### Added
+- Shell hook `type:rewrite` protocol with `updatedInput` support — hooks can now rewrite the command before execution
+- Support for `AGENTS.md` workspace rules — agent reads project-level rules from AGENTS.md automatically
+- Avatar support in Web UI
+- Open first tab automatically on session start
+
+### Improved
+- New-session page UI humanized with improved layout and discoverability
+- Session bar slot support for extension customization
+- Extension description metadata in ext-studio
+
+### Fixed
+- Mobile new-session page layout uses fixed positioning correctly
+- Weekly stats period now starts from Monday instead of a rolling 7-day window
+- i18n translations updated and UI refreshes immediately on language change
+- Extension market toolbar layout and back button styling
+- Skeleton screen rendering in ext-studio and extension market
+- Trash skeleton screen restored on loading state
+- Media usage logging now passes session_id correctly for image/video generation
+- Billing writes in tests isolated via `CLACKY_BILLING_DIR` env var
+- Meeting panel no longer overrides aside-panel container class
+
+## [1.3.7] - 2026-07-06
+
+### Added
+- Extension ecosystem: install, manage, and publish extensions with Creator Studio
+- Brand extension and brand badge support for extension agents
+- Hook/profile extension type for intercepting and customizing agent behavior
+- Extension upload CLI for publishing extensions from the command line
+- New session page with improved layout and discoverability
+- Session auto-cleanup hint, skeleton loading, and type filter in trash panel
+- Renew button on brand warning bar for expiring subscriptions
+- i18n tooltips for header theme toggle and trash toolbar buttons
+- Refresh button in header to reload sessions
+- xhigh reasoning effort level for supported models
+- i18n file upload error messages
+
+### Improved
+- Merge Creator Center into ext-studio as a unified extension hub
+- Extension developer experience: scaffold template improvements, badge and author metadata support
+- Share modal UI polish — theme dots on hover, close button hover effect, layout refinement
+- Unify Clacky.* JS namespace and single-segment extension architecture
+- Migrate default agents to default extensions with unified panel visibility
+
+### Fixed
+- Ctrl+C now works properly in TUI auto-answer mode
+- Show-system-skills toggle persists correctly and uses theme accent color
+- Cron display handles every-N-hours with weekdays pattern correctly
+- New-session dropdown arrow button responds to both click and keyboard
+- New cron virtual entry inserts at the correct position relative to pinned sessions
+- File upload error messages use i18n consistently
+
+## [1.3.6] - 2026-06-30
+
+### Added
+- Cron task session isolation with independent pagination and stable task count
+- Backup/restore UI in settings with WebSocket reconnect refresh and WSL open-folder support
+
+### Fixed
+- Rewrite human-readable cron parser to handle comma-separated lists, hour ranges, and `*/1` normalization
+- Setup submit button hover color follows accent theme variable
+- Settings button no longer navigates away when already on settings page
+- Use Unix epoch for old thread timestamps to avoid date parsing issues
+
+## [1.3.5] - 2026-06-29
+
+### Added
+- Run agent inside meeting sessions; launch new meetings directly from session context
+- Long video generation support
+- Show raw LLM error message in error card with collapsible detail
+- Fake tool call detector to catch hallucinated tool invocations
+- Accent color customization for Web UI theme
+
+### Improved
+- Refine auto-confirm wait TUI display
+- Improve split button UX and billing period tab hover behavior
+
+### Fixed
+- Terminal: adaptive GBK/UTF-8 decoding for PTY output to fix garbled text on Windows
+- Resolve vision model detection against the actual request model
+- Fix FrozenError when pressing Ctrl+U to clear text in modal
+- Detect scrollbar-drag correctly to prevent unwanted auto-scroll in chat
+- Fix split button dropdown closing when clicking inside button wrap area
+- Show success toast when saving profile or memory
+- Preserve single line breaks in profile/memory preview
+- Make text selection visible in profile/memory editor
+- Preserve memory card expand state across re-render
+- Refresh time machine on task completion
+- Re-check version on WebSocket reconnect so upgrade badge updates
+- Harden DashScope TTS routing and error handling
+
+## [1.3.4] - 2026-06-25
+
+### Added
+- Skill edit UI with brand skill theme colors
+- WebUI language preference propagated to backend for localized error messages
+- Edit message resend with confirmation modal and localStorage key normalization
+- Duplicate model card action
+- i18n support for aside tab labels (files/git/time-machine)
+- File picker defaults to workspace with mkdir/rename support and hardened validation
+- API extensions and EPIPE rebuild client handling
+- Ruby Rich enhancement and refactoring (runtime dependency added)
+
+### Improved
+- Default aside panel to collapsed; sidebar widths aligned to 16rem
+- Onboarding manual config UX and spacing improvements
+- Fixed positioning for modal model/baseurl dropdowns to avoid overflow clipping
+- Disable transition during aside resize drag
+- Rename resetAfterUnbind to resetBrandState to avoid view/store collision
+
+### Fixed
+- Edit tool performs literal replacement (C-5682)
+- Shield code spans before math extraction to prevent LaTeX rendering (C-5635)
+- Preserve updated_at on idle compression and session eviction; fix Today/Yesterday display bug
+- Remove media output dir UI setting — always use session workspace
+- Test: stub req.path and req.request_method in check_access_key loopback bypass spec
+
+## [1.3.3] - 2026-06-23
+
+### Added
+- Profile editor with CodeMirror for editing agent SOUL/USER files
+- Inline editing for memory cards
+- Workspace file preview, plus "copy path" in the context menu and a close button in the code editor
+- Time Machine: browse and restore previous workspace states via git
+- Image editing support in media generation
+- Copy and edit actions on user/assistant message bubbles
+- Media output directory configuration in settings
+- Web UI extension support
+- Health check endpoint and signal logging
+
+### Improved
+- Differentiated icons and reordered buttons in the context menu and memory card
+- Removed the standalone preview panel for a cleaner workspace layout
+- Throttle duplicate inbound channel messages
+- Session bar labels no longer wrap
+- Added Japanese README (README_JA.md)
+
+### Fixed
+- Lock the default-model checkbox when only one model exists (C-5677)
+- Jump to a session that is not yet loaded in the sidebar (C-5679)
+- Workspace panel now uses overlay mode on mobile
+- Clarified that `include_sessions` applies to auto-backup only (UI)
+- Removed extra padding from model cards in the grid
+- Moved profile fetch into the store and fixed the architecture spec
+
+## [1.3.2] - 2026-06-18
+
+### Added
+- Right-click context menu on workspace file tree with "Reveal in Finder" support (macOS/Linux/WSL)
+- Resizable workspace panel with a drag handle
+- Expandable task prompt preview — click a task card to view the full prompt
+
+### Improved
+- Skill cards now show a delete button, with shimmer skeleton loading while fetching
+
+### Fixed
+- Every-N-hours cron schedule label now renders correctly (e.g. `0 */2 * * *`)
+- Billing sessions list now shows all rows instead of being clipped
+- Session replay skips reasoning-only assistant messages to match the live view
+- Set-as-default button in settings aligned to the footer row with the top-up link
+
+## [1.3.1] - 2026-06-17
+
+### Added
+- Delete skills directly from the Web UI
+
+### Improved
+- Sidebar is now draggable to resize, with width persisted across sessions
+- Sidebar scrollbar only appears while scrolling for a cleaner look
+- Billing page UI polish and mobile adaptation
+- Default openclacky image model switched to Nano Banana 2
+
+### Fixed
+- Onboarding device-login window no longer gets blocked as a popup
+
+## [1.3.0] - 2026-06-17
+
+### Added
+- Complete Web UI overhaul: skeleton loading, task card layout, new session dialog, onboarding flow, inline image preview, and redesigned session bar
+- Multimedia generation: video generation, text-to-speech (TTS), and OCR via vision models
+- IM channel management UI — bind and unbind channels directly in Web UI
+- `/model` command in terminal UI for quick model switching
+- AI-key device login flow
+- Session sharing and backup support
+
+### Improved
+- Terminal output auto-collapses on completion with normalized result display
+- Billing page mobile layout, global tooltip, and logo animation polish
+- Live chat history API replaces group buffer polling for real-time sync
+
+### Fixed
+- Sidebar scrolling back to active session on content updates
+- Channel key missing arbitration on session restore
+- Race condition in model switching
+- Channel keys and info out of sync on bind/unbind
+
+## [1.2.18] - 2026-06-13
+
+### Added
+- Alibaba DashScope (Qwen-Image) as a new image generation backend
+- "Always show" toggle for media-gen and skill-creators default skills, keeping them visible in all sessions
+
+### Fixed
+- Brand skill files not accessible outside their initial session context
+- `/model` command
+
+### More
+- Brand skills page now auto-refreshes on enter
+
+## [1.2.17] - 2026-06-12
+
+### Added
+- Session sharing to Web UI — share any session via a shareable link with billing integration
+- Share telemetry tracking
+
+### Fixed
+- Markdown rendering in certain edge cases
+- Image blocks not detected in replay round counting, potentially causing history truncation
+- History images served as base64 causing replay lag, now proxied through server
+- WSL kernel repair getting stuck in infinite loop on pending state
+- WeChat QR login fallback showing false stale-session errors
+
+### More
+- Background color styling update
+
+## [1.2.16] - 2026-06-10
+
+### Added
+- Claude Fable 5 model support
+
+### Fixed
+- Model test failed when using saved API key
+- Windows WSL install success rate
+
+## [1.2.15] - 2026-06-10
+
+### Added
+- Proxy configuration support
+- Optional sound notification on task completion in Web UI
+
+### Fixed
+- Prevent scheduler thread from dying on tick exception
+
+### More
+- Tool diff CSS refinement
+
+## [1.2.14] - 2026-06-08
+
+### Added
+- OCR support for scanned PDFs (optical character recognition)
+- VLM-based PDF parser for improved document understanding
+
+### Improved
+- PDF OCR processing quality
+
+### Fixed
+- PDF processing not appearing in session history
+- Stale progress indicator that wouldn't dismiss
+
+### More
+- Document Bing smoke test anti-scrape failure handling in gem-release
+
+## [1.2.13] - 2026-06-08
+
+### Added
+- Session forking capability (Fork any message to a new session)
+- Gemini Flash 3.5 support and MIMO model pricing
+- Web search content capability and search skill LRU caching
+- Token usage visibility after tool calls
+- Subagent UI formatting for better readability
+
+### Improved
+- Web search performance using Bing race search strategy
+- Input box automatically clears when switching sessions
+- Skill evolution info display simplified
+- TUI adds an extra progress bar for better visual feedback
+
+### Fixed
+- Dir-picker path input synchronization on directory navigation
+- Thinking mode silent retries
+- IME (Input Method Editor) input check issues
+- WebUI reflect bug
+- Upstream JSON loading stability
+- Prevent skill evolution when the last message is incomplete
+
+## [1.2.12] - 2026-06-05
+
+### Fixed
+- Remove ruby_rich C extension dependency that caused installation failures
+
+## [1.2.11] - 2026-06-05
+
+### Added
+- Logo branding in sidebar footer with link to official website
+- Onboarding charge tips for new users to understand billing
+- WebUI tool panel expand/collapse toggle for better space management
+- Region parameter for CDN and install script switching (CN vs global)
+- Automated Feishu app creation via OAuth device flow — no more manual App ID/Secret entry
+- Feishu group chat history with sender name identification
+- Cron job entry sorting by enabled status and running state indicator
+- Quick switch model selector: show only active model name in card, rename sub-model
+- API server now binds to non-local IP by default for LAN access
+
+### Improved
+- Sequential image generation now shows tips when generation is slow
+- Startup time reduced significantly
+- Clear GEM_HOME during Ruby 3 installation to avoid gem conflicts
+
+### Fixed
+- Uninstall crashes when brand.yml has no product_name configured
+- Tool calls go stale after channel interrupt, causing silent failures
+- Sanitize tool names to prevent invalid characters
+- Completion summary now accumulates correctly across supplementary message relays
+- WSL install exit code 2 (network unreachable) now propagates properly
+- Recycled sessions now sorted by deletion time instead of creation time
+- Idle status now updates correctly after server restart
+
+## [1.2.10] - 2026-06-03
+
+### Added
+- Compressor concurrency config and Ollama context size auto-detection
+- Channel sessions auto-rebind on server restart
+- Disk space check (4 GB minimum) on Windows install
+- WSL network connectivity pre-check before installation
+- MiniMax M3 provider with vision support and pricing
+- One-click exchange rate update in settings
+- Rich TUI controller (experimental, enable with `--ui rich`) for terminal interaction
+
+### Improved
+- WebUI working directory selector UX
+- Qwen pricing table: official rates, promo discounts, clean up stale models
+
+### Fixed
+- Directory picker interaction and indentation issues
+- File upload for PDF and Excel files
+- Session soft-delete: count-based cleanup and never evict pinned sessions
+- Usage tooltip total value showing unreadable blue background
+- Workspace file list now collapses on session switch
+- Install script network errors use exit code 2 for better error handling
+
+## [1.2.9] - 2026-06-01
+
+### Added
+- Image generation support via model tool calls
+- Startup telemetry now reports launch source for better usage analytics
+
+### Improved
+- Feishu channel setup simplified with Agent App flow — fewer manual steps and no redirect URL config needed
+
+### Fixed
+- Network region detection hardened with CDN fallback to handle edge cases and improve reliability
+
+## [1.2.8] - 2026-06-01
+
+### Added
+- Extensibility framework: patching, shell hooks, and channel user adapter plugins — customize Clacky behavior without modifying core code
+
+### Improved
+- Billing session list now shows session names, merged deleted sessions, and standardized token breakdown with cache hit/miss color coding
+
+### Fixed
+- Streaming LLM responses automatically retry when connection drops instead of silently truncating
+
+### More
+- Extend openclacky skill with additional extension points
+
+## [1.2.7] - 2026-06-01
+
+### Added
+- Session workspace file explorer — browse and download files in Web UI sidebar
+- Channel manager: new, clear, and skill commands
+- Top-up link in Web UI under billing section
+- Sub-model switching within active sessions
+- Claude 4.8 model support
+- Connection test improvements for custom Claude models
+
+### Fixed
+- Nil error in compress top match parsing
+- Empty 0-token responses causing agent stalls (close #218)
+- Brand config built-in skills loaded without MANIFEST.enc.json (C-5627)
+- Terminal .exe stdin isolation at command-wrap on WSL (close #221)
+- Overly verbose builtin skills installed message during onboarding
+
+### More
+- Add Docker installation section to README
+
+## [1.2.6] - 2026-05-29
+
+### Added
+- WPS format support for document processing
+- `--json` flag support with `-m` option
+
+### Improved
+- Billing UI and model filtering experience
+- Brand skill download now retries on failure
+- DeepSeek compatibility handling within OpenRouter provider
+
+### Fixed
+- Claude `tool_use.id` error when switching between models
+- Browser page navigation pageid bug
+- Browser IIFE execution issue
+- WSL UTF-8 command encoding bug
+- File preview path directory resolution
+
+### More
+- Remove list/undo/redo task tool
+- Clean up legacy provider code
+- Improve platform error messages for easier diagnostics
+
+## [1.2.5] - 2026-05-28
+
+### Fixed
+- Bash tool stream output not rendering in real-time
+- Multi-line shell output being incorrectly stripped
+
+### More
+- Remove WSL2 network doctor script for better compatibility
+
+## [1.2.4] - 2026-05-27
+
+### Added
+- Browser/agent snapshot now supports `with_page` for paginated results
+- Prefer WSL1 over WSL2 for better compatibility
+
+### Fixed
+- Feishu post message type and WeCom mixed message type not handled properly
+- WeChat stale QR code session not detected when reconfiguring channel
+- Channel adapter using stale reference after reconfiguration
+- Benchmark terminated early by 10-second outer request timeout
+- Model card action buttons overflowing on narrow viewports
+- Save button staying disabled when reopening model edit modal
+- WSL pipe breaking when `redirect_exe_stdin` appends `</dev/null`
+- MCP registry not hot-reloading after writing config
+- MCP server breaking from bashrc PS1 customization
+- Terminal realtime output not streaming correctly
+- PowerShell UTF-8 encoding issues
+- WSL bashrc not loading in non-interactive shells
+- Qwen 3.7 Max incorrectly treated as vision-capable model
+
+### More
+- Log service start failure reason for easier diagnostics
+
+## [1.2.3] - 2026-05-27
+
+### Added
+- Qwen 3.7 model support
+- WSL network doctor PowerShell script
+- Limit on glob/grep file walker to prevent excessive traversal
+
+### Fixed
+- Terminal single-line mode issue
+- Terminal execution hang
+- apt try logic
+
+## [1.2.2] - 2026-05-25
+
+### More
+- Add telemetry for task cost and model tracking
+
+## [1.2.1] - 2026-05-25
+
+### Fixed
+- MCP server UI display issue in Web UI
+
+## [1.2.0] - 2026-05-24
+
+### Added
+- MCP (Model Context Protocol) support with HTTP server transport
+- MCP management skill for adding, listing, probing, and reconfiguring MCP servers
+- Settings panel restructure with new "UI" and "About" tabs
+- Advanced settings toggles for compression, prompt caching, and memory update
+- Session recycle bin with soft-delete, restore, and bulk-empty operations (#172)
+- Billing system with USD/CNY currency settings (#166)
+- Configurable default working directory (#170)
+- Model ID select for switching between configured model IDs
+- Sequential image naming with upload order guarantee in Web UI (#188)
+- Browser link tips in agent output
+- Fallback URL support for model providers
+- ROADMAP.md outlining four focus areas
+
+### Improved
+- Browser tool reliability and ergonomics
+- Idle compression interval increased to 314s for fewer interruptions
+- Removed dead WeChat split_message and markdown_to_plain code paths (#187)
+
+### Fixed
+- Brand setting persistence
+- Interactive feedback card now restored during history replay (C-5599) (#190)
+- Model switcher disabled while agent is responding (C-5559) (#189)
+- Stale function call no longer breaks interrupt handling
+- Trash tool now supports directory deletion (#173)
+- Command suggestions dropdown scrolling (#157)
+- Comprehensive mobile Web UI fixes (#165)
+- WSL_UTF8=1 vs OutputEncoding=Unicode conflict in Test-UbuntuInstalled (#164)
+- USR1 hot-reload session info drop bug (#142)
+
+### More
+- DeepSeek price update
+- Contributors list and contributing readme
+- Session translation polish
+
+## [1.1.6] - 2026-05-22
+
+### Added
+- Fold cron sessions into a collapsible group in session list sidebar
+
+### Fixed
+- Free skill hints display issue
+
+## [1.1.5] - 2026-05-22
+
+### Fixed
+- Async free skills handling
+
+## [1.1.4] - 2026-05-22
+
+### Added
+- Thinking level control for AI models, configurable per provider
+- Free brand customization support
+- Syntax highlighting and per-block copy button for code blocks in Web UI (#152)
+- Font size setting (small/medium/large) with proportional UI scaling in Web UI (#147)
+- Chinese README documentation (#148)
+
+### Improved
+- Unify POST /api/file-action with download support for remote deployments (#153)
+- Hover interaction polish across Web UI
+
+### Fixed
+- Upgrade hot reload no longer leaves stale process (#143)
+
+## [1.1.3] - 2026-05-20
+
+### Added
+- Qwen3.6 (qwen3.6) model provider
+- Provider dropdown auto-focuses when opening model config in onboarding and settings
+- Dockerfile for containerized deployment
+- Debian apt mirror support for CN users, with refactored mirror configuration
+
+### Fixed
+- History file parsing incorrectly handles certain message formats
+- DeepSeek model pricing and token counting
+- Compression progress bar display during message compression
+- DingTalk: markdown message rendering, file/image delivery failures, and inbound file message type handling
+
+## [1.1.2] - 2026-05-20
+
+### Added
+- Streaming response with real-time token display in WebUI
+- Stream thinking progress indicator during agent reasoning
+- Time-to-first-token (TTFT) display in WebUI
+- LaTeX rendering support in WebUI
+- Cache hit rate display in WebUI
+
+### Fixed
+- Reasoning content properly passed as `<think>` tags to WebUI
+- User-set session name no longer overwritten by auto-rename (#136)
+- Server command now supports `--help`/`-h`/`--bind`/`-b` and `-p` alias for `--port` (#135)
+- WSL.exe output encoding and premature WSL1 fallback detection (#130)
+- Hide edit/delete model options when no models are configured (#133)
+- BrowserManager MCP process cleanup on agent exit in CLI mode (#132)
+- Windows-native OpenClaw config detection on WSL during onboarding (#129)
+
+### More
+- Updated Windows installation docs and added GitHub star history
+
+## [1.1.1] - 2026-05-17
+
+### Added
+- **WeChat SendQueue with batching, throttling, and retry.** Messages sent to multiple WeChat official account users are now queued, batched (up to 100 recipients per call), throttled to 1 batch/second, and automatically retried on failure — preventing 45007 rate-limit errors during broadcasts. (#127)
+- **Session ID in TUI session bar.** The terminal UI session bar now displays the session ID alongside the session name, making it easy to identify sessions when cross-referencing with logs or Web UI.
+- **TUI todo clean-up on task completion.** Completed todos are now removed from the terminal display when a task finishes, keeping the TUI uncluttered. (#94)
+
+### Improved
+- **Brand skills persist across same-brand upgrades.** Brand skills are no longer removed and re-downloaded when the brand stays the same after an upgrade — eliminating unnecessary network calls and keeping skill state stable.
+- **Ruby 2.6 install reliability.** The installer now pre-installs rouge 3.30.0 before `gem install` and retries with a pinned version on Ruby 2.6, avoiding dependency resolution failures on older macOS system Ruby.
+
+### Fixed
+- **TUI progress bar flicker.** The progress bar in terminal mode no longer flashes when updating rapidly, providing a smoother visual experience.
+- **Xcode command auto-install loop.** The agent no longer gets stuck in a loop trying to auto-install missing Xcode command-line tools.
+- **Brand license warning after 3-day idle.** Fixed a spurious license warning that appeared on startup after the server had been idle for 3 days.
+
+## [1.1.0] - 2026-05-15
+
+### Added
+- **DingTalk channel adapter.** New IM channel adapter connects openclacky to DingTalk via Stream Mode WebSocket. Includes DingTalk API client for text/markdown messages, Device Flow QR setup script, and full Web UI integration with channel config, HTTP server routes, and i18n strings. (#112)
+- **Feishu channel-manager skill setup & onboard improvements.** Channel-manager now includes a dedicated Feishu skills installation flow (`install_feishu_skills.rb`) and updated setup instructions. Skill installation is serialized for reliability. (#122)
+- **Custom datepicker component with i18n support.** New reusable datepicker component with CSS variable theming and full English/Chinese localization, replacing browser-native date inputs. (#119)
+- **Rename sessions via modal dialog.** Session rename now uses a proper modal dialog with i18n support instead of inline editing, for a cleaner UX. (#113)
+- **Channel enable/disable toggle.** Configured channels can now be individually enabled or disabled from the Channels page without removing credentials. Distinguishes "disabled" from "not configured" in badge and hint text. (#108)
+- **Provider promo hint for OpenClacky.** When OpenClacky is selected as provider, a contextual promo hint appears below the dropdown on both settings and onboarding pages, with dark mode support and localized copy. (#109)
+- **Running config for concurrent agent limits.** New `AgentConfig` running configuration and `SessionRegistry` concurrency controls to limit the number of simultaneously active agents, preventing resource exhaustion on busy servers.
+
+### Improved
+- **Channel page and sidebar nav polish.** Visual refinements to the Channels page layout and sidebar navigation styling.
+- **Telegram group chat skill guidance.** Channel-setup skill now clarifies Privacy Mode requirements for Telegram group chats, preventing common misconfiguration. (#117)
+
+### Fixed
+- **Channel skill trigger matching.** Renamed `channel-setup` to `channel-manager` so the agent's send-message intent matches the correct skill more reliably. (C-5584, #120)
+- **Markdown image overflow in chat bubbles.** Images in assistant messages are now width-constrained to fit within the message bubble instead of overflowing. (C-5585, #118)
+- **Channel image rewriting scoped to Web UI.** Local image URL rewriting is now applied only in the Web UI context; IM channel messages use the file basename as attachment name instead. (C-5590, #115)
+- **Discord file upload.** Added multipart middleware to the Discord Faraday connection so file attachments upload correctly. (C-5589, #116)
+- **File walk respects ignore patterns.** Fixed glob/walk to apply ignore patterns before traversal, resolving cases where ignored files were still visited. (#102)
+- **Server restart kills stale PIDs.** Improved process cleanup on restart with better PID management and user-facing hints when restart fails.
+- **Device ID persistence.** Device ID is now persisted in `BrandConfig` instead of being regenerated, ensuring stable telemetry identity across restarts.
+- **Terminal markdown rendering on Ruby 4.0.** Fixed compatibility issue with Ruby 4.0's stricter method dispatch that broke terminal markdown output. (#99)
+
+## [1.0.5] - 2026-05-12
+
+### Added
+- **Telegram channel adapter.** New IM channel adapter that connects openclacky to Telegram via the Bot API. Setup is just a bot token from @BotFather — no browser automation, no QR. Mirrors the existing Feishu / WeCom / Weixin contract: HTTPS long-poll inbound, `sendMessage` / `sendPhoto` / `sendDocument` outbound, photo + document download routed through the standard FileProcessor + vision pipeline, group `@-mention` filtering and `allowed_users` whitelist. `base_url` is configurable to support self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) for networks where `api.telegram.org` is unreachable. Frontend Channels panel, `channel-setup` skill, English/Chinese i18n, and `app.css` logo class added. 32 new specs in `spec/clacky/server/channel/adapters/telegram/`.
+- **Discord channel adapter.** Full Discord integration via REST API + Gateway (WebSocket), with channel-setup support, Web UI Channels panel entry, and i18n strings. Connect Clacky to Discord servers for bot interactions through slash commands and message events.
+- **OpenRouter curated model list.** The OpenRouter provider now ships with a curated dropdown of mainstream Claude and GPT models (Sonnet, Opus, Haiku, GPT-5.5/5.4), so users can pick from the list instead of typing model IDs manually. Full catalogue still accessible by typing any model ID.
+- **OpenRouter lite model pairing.** Subagents on OpenRouter now automatically get a sensible cheap/fast sidekick — Claude family pairs with Haiku, GPT family pairs with the mini variant — matching the behavior already available on the native OpenAI and OpenClacky providers.
+- **MiMo 2.5 Pro (Xiaomi) model support.** Added `mimo-v2.5-pro` to the MiMo provider preset alongside existing MiMo models.
+- **AI key setup guide link.** New users and those configuring API keys now see a "New to AI keys? See the guide →" link on both onboarding and settings pages, pointing to the official documentation.
+
+### Improved
+- **Default model upgraded to claude-sonnet-4-6.** The OpenClacky provider now defaults to the latest Claude Sonnet model for better performance out of the box.
+
+### Fixed
+- **Linux server restart stability.** Fixed an inherited socket cleanup bug where WEBrick's shutdown would propagate `SHUT_RDWR` to the shared kernel socket, breaking subsequent `accept()` calls on Linux. The server now detaches inherited sockets before shutdown so worker restarts work reliably.
+- **Upgrade failure recovery UI.** When an in-app upgrade restart fails, the UI now shows both tray icon and CLI recovery paths (`gem update ...`) instead of leaving users stranded. Also added branded CLI command info to the version check API for white-label builds.
+
+## [1.0.4] - 2026-05-11
+
+### Added
+- **`persist-memory` subagent skill — agents can now save things to long-term memory.** New built-in `persist-memory` skill (forked subagent, auto-summarized, no web tools) handles file naming, topic merging, frontmatter, and size limits when writing to `~/.clacky/memories/`. The memory updater and skill manager now route persistence requests through this subagent for cleaner separation of concerns. Covered by new specs in `memory_updater_spec.rb` and `skill_manager_memories_spec.rb`.
+- **System prompts aligned with Claude Code behavioral rules.** Rewrote `base_prompt.md` and the coding/general system prompts with 6 new sections (Code Style, File Modification Rules, Response Style, Git Safety Protocol, Error Handling, Task Tracking). Internal benchmark on 5 tasks showed −40% response verbosity, −24% task duration, and qualitative improvement on 4/5 tasks with no regression in completion rate. (#96)
+- **Local image proxy via `GET /api/local-image` (C-5523).** New HTTP server endpoint exposes local images (e.g. screenshots written by tools) to the Web UI through a controlled proxy, with new `FileProcessor` utilities backing it. 86 new specs in `file_processor_spec.rb`. (#93)
+- **Kimi Code (Coding Plan) provider preset.** New first-class provider entry for Moonshot's Kimi Code coding plan, with proper Anthropic-format cache headers (`cache_creation_input_tokens` / `cache_read_input_tokens`) wired through the client so prompt caching actually lands on the backend. Verified end-to-end against a paid account with 14336 cached tokens hit on the second turn. (#89)
+- **Opt-in Feishu CLI install & auth step in channel setup.** `channel-setup` skill now offers an optional Feishu CLI install + auth step and ships an `import_lark_skills.rb` helper that imports Lark-related skills on demand. (#98)
+- **Ruby 4.0 added to CI matrix.** GitHub Actions main workflow now runs the test suite against Ruby 4.0 in addition to existing versions, catching forward-compat issues early.
+
+### Fixed
+- **Session bar correctly attributes cost & skill reflection in subagents.** Fixed `cost_tracker` and `skill_reflector` so the parent session's bar no longer mis-counts subagent activity, giving accurate per-session cost and skill stats when forked subagents (like `persist-memory`) run.
+
+### More
+- Updated onboarding skill copy.
+
+## [1.0.3] - 2026-05-09
+
+### Added
+- **Channel send command — push messages from CLI/agent to IM channels.** New `clacky channel send` CLI command and full outbound channel pipeline. The agent can now actively reach out to users on Feishu/WeCom/WeChat (e.g. for cron tasks or background completions) instead of only replying. Includes a new `ChannelManager` for routing, multi-master server discovery, and proper `chat_id` extraction for outbound messages. (#73)
+- **`--model` flag to override the model per invocation.** Run any one-off command with a different model without changing config: `clacky --model gpt-4o-mini "..."`. Useful for quick comparisons or routing specific tasks to cheaper/faster models. (#76)
+- **Fuzzy tool-name resolution for cross-model compatibility.** When a model emits a slightly off tool name (e.g. `read_file` vs `file_reader`, case mismatches, or hyphen/underscore differences), the agent now resolves it to the closest registered tool instead of erroring out. Significantly improves reliability when switching between Claude, GPT, and other providers. (#78)
+- **Context overflow auto-recovery.** When an upstream LLM call hits a context-length error, the agent now detects it via `LlmCaller`'s error classification and automatically compresses message history to retry — instead of bubbling a hard error to the user. Backed by 175 new error-detection and 169 new recovery specs.
+- **Refined session list UI with SVG icons.** Reworked sidebar session list with crisp SVG icons and tightened styling for a more polished look. (#83)
+
+### Fixed
+- **EPIPE crashes when stdout/stderr is closed.** Wrapped server I/O in `EpipeSafeIO` so the master/web server no longer crashes when its output stream goes away (e.g. terminal closed, pipe broken). Covered by 193 new specs.
+- **Duplicate `$` in CLI completion line.** Removed the stray dollar sign that appeared at the end of completed commands. (C-5583, #86)
+- **Session list scroll jump on "load more".** The list no longer snaps back to the top when older sessions are paginated in. (C-5568, #85)
+- Reverted an earlier message line-wrap change (#74) that caused regressions; will be revisited. (#84)
+
+## [1.0.2] - 2026-05-07
+
+### Added
+- **Multi-region provider endpoints.** Providers can now expose multiple endpoint variants (e.g. global vs. CN-optimized Anthropic), and you can switch between them from both the onboarding flow and the Settings page. Bundled with updated model pricing data so cost estimates stay accurate across regions. (#67)
+- **Pre-installed platform-recommended skills during onboarding.** New users get a curated set of skills automatically during onboard — downloaded concurrently with dual-host fallback and a hard deadline so onboarding never hangs on a slow mirror. (#68)
+- **Builtin skills served via platform API.** Recommended skills are now fetched through `/api/v1/skills/builtin`, making the list easier to update without shipping a new gem. (#72)
+- **Feishu group chats: respond only when @-mentioned.** The Feishu adapter now parses the mentions array and ignores group messages that don't @ the bot, so the bot no longer replies to every message in a busy group. Sessions are also isolated per (chat, user) pair by default (`:chat_user` binding mode), preventing context leaks between DMs and groups. (#71)
+
+### Fixed
+- **Recover from truncated upstream tool calls.** When an upstream LLM response cuts off mid tool-call, the agent now detects the truncation and recovers automatically instead of getting stuck. Covered by extensive new tests.
+- **Feedback option click now sends the message.** Clicking a suggested feedback option previously set the input text but silently failed to send (due to a `sendMessage` vs `_sendMessage` scope bug). Now it dispatches immediately as expected. (#69)
+- **Sidebar footer and input area heights aligned.** Introduced a shared `--footer-height` CSS variable (56px) and reworked the stop button to use a pseudo-element square for pixel-perfect centering — both columns now line up cleanly. (#70)
+- **Feishu bot fails closed on API outage.** If `/open-apis/bot/v3/info` fails and `bot_open_id` can't be resolved, the adapter now drops group messages (with a warning) instead of spamming every group message as a fallback.
+- **`preview.md` no longer pollutes user project directories.** Preview files are written to the system tmpdir, and plain text formats (md/log/csv) skip preview generation entirely since they're already readable as-is.
+
+### More
+- Added agent stop logging to make interrupt / stop chains easier to debug.
+
+## [1.0.1] - 2026-05-06
+
+### Added
+- **OpenRouter Anthropic API support.** You can now route Claude model requests through OpenRouter, giving access to Anthropic models via a single OpenRouter API key — useful when Anthropic direct access is limited in your region.
+- **GPT provider support.** Direct GPT provider configuration is now available alongside other providers, making it easier to switch between different OpenAI-compatible endpoints.
+- **OCR-powered PDF reading.** PDF files that contain scanned images (non-text PDFs) are now readable via OCR, allowing the agent to extract content from scanned documents, invoices, and image-heavy PDFs.
+- **Terminal output size control.** The agent now limits terminal output to a configurable size, preventing token overflows when running commands that produce very long output.
+- **Memories & Trash manager in Web UI.** A new management panel lets you browse, review, and delete agent memories and trashed files directly from the Web UI.
+- **Watchdog for interrupt messages.** A background watchdog ensures interrupt signals reliably stop the agent even when it's deep in a tool execution loop.
+- **Skill import with category directory scanning.** When importing skills from openclaw packages, nested category directories are now scanned automatically, so all skills in a category bundle are imported at once.
+
+### Improved
+- **Deploy skill simplified.** The deploy skill now uses Railway CLI directly without custom helper tools, making deployments more reliable and the codebase significantly lighter.
+- **Fix double-render of progress indicators.** Progress spinners and status lines no longer render twice in quick succession, keeping the Web UI output clean.
+- **Session idle status tracking and file descriptor cleanup.** Sessions now correctly report idle state when the agent finishes, and open file descriptors are properly closed to avoid resource leaks.
+- **GPT-4.1 and GPT-5 pricing added.** Model cost tracking now includes the latest GPT-4.1 and GPT-5 pricing tiers.
+
+### Fixed
+- **UTF-8 encoding error in file preview.** Opening files with non-UTF-8 characters no longer crashes the preview — they are now handled gracefully.
+- **Expand `~` in openfile path.** The "open file in editor" API endpoint now correctly expands `~` to the user's home directory.
+
+## [1.0.0] - 2026-04-30
+
+### Added
+- **Speed test tool in Web UI.** Test API response latency for different models and providers directly from the settings panel, making it easy to find the fastest endpoint for your region.
+- **History chunk loading.** Previously compressed conversation chunks can now be loaded back into the session when needed, so long-running conversations don't lose context.
+- **Default model changed to 4.5.** New default model provides better balance of speed, quality, and cost for most tasks.
+
+### Improved
+- **Thinking indicator now visible for more steps.** The "thinking..." indicator stays visible longer during complex operations, giving better feedback about what the agent is doing.
+- **Message timestamps display correctly in Web UI.** User message times now show properly without layout issues, and the scroll behavior is smoother.
+
+### Fixed
+- **Scroll position no longer jumps unexpectedly** in the Web UI when loading session history.
+
+## [1.0.0.beta.6] - 2026-04-30
+
+### Fixed
+- **Compression chunk indexing now uses disk-based discovery.** Chunk files are no longer incorrectly overwritten after the second compression. Previously, chunk index was counted from compressed_summary messages in history — which caps at 1 after rebuild — causing chunk-2.md to be overwritten on every subsequent compression. Now uses durable disk-based chunk discovery via SessionManager, ensuring all compressed chunks are preserved.
+- **Skill evolution no longer creates duplicate skills.** The reflect and auto-create scenarios in skill evolution are now mutually exclusive: when a skill was just used, only reflection runs; when no skill was used, only auto-creation is considered. This prevents near-duplicate "auto-*" skills from being extracted from tasks already served by an existing skill.
+
+### Improved
+- **Slash commands no longer misinterpret filesystem paths.** Pasted paths like `/Users/alice/foo` or `/tmp/bar` are no longer mistaken for slash commands, avoiding confusing "skill not found" notices.
+
+## [1.0.0.beta.5] - 2026-04-29
+
+### Added
+- **WSL2 mirrored networking mode for localhost access.** Windows users running under WSL2 can now configure mirrored networking, allowing the Clacky server to be reached at `localhost` from the Windows host instead of needing to look up the WSL IP address.
+- **Message compressor preserves chunk order.** Compression chunks are now consistently ordered with `chunk-nn` naming, making it easier to browse and understand compressed conversation history.
+- **Session model is now saved.** The currently active model selection is persisted in session data, so it survives page refreshes and server restarts.
+- **Feedback button styling in Web UI.** The feedback interface now has improved CSS styling for a better user experience.
+
+### Improved
+- **Fewer LLM turns for common tool operations.** The file reader, security tool, and todo manager have been optimized to require fewer round-trips with the AI model, making tasks faster and cheaper.
+- **Terminal now supports mise-based Node.js.** The terminal tool correctly resolves Node.js when installed through `mise` version manager, not just `nvm` or system paths.
+
+### Fixed
+- **Browser MCP connection recovers from crashes.** The browser tool's MCP daemon handles process restarts more gracefully, and stale Node.js detection code has been cleaned up.
+- **Brand configuration no longer crashes on empty data.** When brand config data is empty or missing, the system now handles it gracefully instead of raising an error.
+- **Kimi K2.5 and K2.6 models now show correct pricing.** These models are now in the pricing table, so cost tracking reflects actual usage costs.
+- **Feishu messages with images no longer silently dropped.** Image markdown syntax in Feishu messages is now sanitized before sending, preventing the Feishu API from silently rejecting them.
+- **Onboarding model selector and provider presets fixed.** The model combobox in the onboarding flow now works correctly, and provider presets are properly updated.
+- **File reader now works correctly with OpenAI provider.** Files attached to sessions are now properly read and processed when using the OpenAI API format.
+- **Image URLs with special tokens no longer mis-handled.** The message formatter no longer mis-handles image URLs containing special tokens (e.g., `bong`).
+
+### Changed
+- **`run_project` tool removed.** This deprecated tool has been removed. Use the terminal tool to run commands in projects instead.
+
+### More
+- Improved WSL2 detection on Windows PowerShell installer
+- Minor test and documentation fixes
+
+## [1.0.0.beta.4] - 2026-04-28
+
+### Fixed
+- **Fix**: onboard.js was calling defunct `POST /api/config` → now calls `POST /api/config/models`
+
+## [1.0.0.beta.3] - 2026-04-28
+
+### Added
+- **File attachments now support Markdown, plain text, and `.tar.gz` archives.** When you attach `.md`, `.txt`, or `.tar.gz` files to a session, the agent can read and reason over their contents directly.
+- **Image type auto-detection.** Image files are now correctly identified by their binary content (magic bytes), not just their file extension — preventing misclassified images from causing upload or vision errors.
+
+### Improved
+- **Settings page fully revamped.** The Web UI Settings panel now saves configuration correctly and exposes a richer set of options for managing providers, models, and API keys.
+- **Skills no longer have a 50-item cap.** The skill loader previously limited the results list to 50 entries; that cap has been removed so all available skills show up.
+- **Cost tracking no longer requires a hard-coded price list.** Model pricing is now resolved dynamically, so new models show real cost figures instead of falling back to a default.
+
+### Fixed
+- **Terminal tool no longer crashes on non-UTF-8 output.** Commands that emit binary or non-UTF-8 bytes (e.g. compiled output, legacy scripts) no longer raise an encoding error in the terminal tool.
+
+## [1.0.0.beta.2] - 2026-04-27
+
+### Added
+- **New session creation supports model & working-directory options.** The Web UI "new session" dialog now lets you pick the model and starting directory up front, instead of having to adjust them after the session opens.
+
+### Fixed
+- **System prompt now refreshes when you switch models.** Previously the system prompt captured at session start stuck around even after model switches, which could leave model-specific instructions out of sync. The agent now re-injects the correct system prompt on every model change.
+- **Port 7070 properly released when the terminal tool exits.** A lingering listener on port 7070 could block subsequent runs; the terminal tool now cleans it up on shutdown.
+- **Windows installer uses `[IO.Path]::GetTempPath()` for the temp directory** (#58) — more reliable than `$env:TEMP` on systems where the env var is unset or points to a non-ASCII path.
+
+## [1.0.0.beta.1] - 2026-04-26
+
+### Added
+- **Vision support — agents can now "see" images.** When you attach image files (PNG, JPG, GIF, WebP), the agent can analyze them visually with vision-capable models. Non-vision models automatically fall back to disk references instead of breaking.
+- **DeepSeek V4 (Clacky-DS) provider.** New `deepseekv4` provider preset with native DeepSeek API endpoint, supporting `dsk-deepseek-v4-pro` and `dsk-deepseek-v4-flash` models with accurate pricing.
+- **Memory subagent.** Long-term memory management now runs as a dedicated background subagent — writes memories when the task reaches meaningful completion, instead of on every turn.
+- **Usage telemetry.** Anonymous usage data collection helps us understand how the product is used and prioritize improvements. No personal or conversation data is collected.
+- **Brand configuration auto-refresh.** White-label brand settings now refresh automatically when the WebUI starts up, no manual restart needed.
+
+### Improved
+- **Progress handles revamped.** Nested progress handles now hide/show automatically, ticker threads keep animations smooth, and fast-completing tasks no longer flash a pointless "done" message.
+- **Todo manager tool upgrades.** Batch add/remove multiple todos at once, and completed todos auto-clear when you add new ones.
+- **Model switching more robust.** CLI slash commands (/config) now work seamlessly, server-side routing handles dynamic endpoints correctly, and switching between all provider types is more reliable.
+
+### Fixed
+- **Access key now persists via cookies.** The WebUI login key was stored only in `localStorage`, causing WebSocket connections to lose authentication. Now also written to a `clacky_access_key` cookie for consistent auth across all connection types.
+- **MiniMax → DeepSeek switch error.** Switching models from MiniMax to DeepSeek no longer fails due to mismatched message format handling.
+- **Bedrock truncated tool call recovery.** When AWS Bedrock truncates a tool call mid-argument, the agent now detects the error, sends feedback, and successfully retries on the next turn.
+- **Sidebar "Load More" scroll jump.** Clicking "Load More" at the bottom of the session list no longer jerks the sidebar back to the active session — scroll position is now preserved.
+- **Double-render regression.** An output buffer lifecycle bug that occasionally caused duplicate content in the terminal UI has been fixed.
+- **DeepSeek V4 message content extraction.** Compression no longer mishandles DeepSeek V4's user message content format.
+
+## [0.9.38] - 2026-04-24
+
+### Fixed
+- **Access key now persists correctly via cookie**. When the Web UI server was configured with `--access-key`, the key entered at login was stored only in `localStorage` — but WebSocket connections and some API requests read the key from cookies. This mismatch caused authenticated sessions to sporadically lose access (e.g. WebSocket falling back to unauthorized). The auth flow now writes the key to both `localStorage` _and_ a `clacky_access_key` cookie, and probes the server using the cookie. Incorrect keys are cleared from both stores before retry. Up to 3 attempts are allowed before giving up.
+
+### More
+- Auth prompt input field now uses `type="password"` while the user is typing (reverts to text after), preventing shoulder-surfing
+
+## [0.9.37] - 2026-04-24
+
+### Fixed
+- **Critical: pinned sessions could silently disappear from the sidebar** ("the pinned one isn't showing, and refreshing sometimes fixes it"). Root cause: the backend `list` endpoint only sorted by `created_at` and applied `limit` blindly, so a pinned session older than the first page's rows was cut off entirely — the frontend's `byPinnedAndTime` sort never saw it. "Refreshing sometimes worked" only if the pinned session happened to be recent enough to land in the first 20 rows. Fix: `SessionRegistry#list` now partitions results and **always returns ALL matching pinned sessions on the first page regardless of `limit`**, followed by up to `limit` non-pinned sessions. The `before` cursor applies only to the non-pinned section, so "load more" pages never re-send or duplicate pinned rows. `/api/sessions`'s `has_more` is now computed from non-pinned overflow only. Frontend `loadMore` cursor also excludes pinned rows so pagination jumps correctly. Regression specs cover: (a) an old pinned session still appears when `limit=3`, (b) multiple pinned sessions all fit on page one with `limit=1`, (c) pinned sessions never duplicate into `before`-cursor pages.
+- **Critical: saving one model in Web UI Settings silently wiped other models' API keys.** The 0.9.36 index→id refactor (commit `b61e22e`) rebuilt each model hash from scratch on save (`"api_key" => api_key.to_s`), dropping the old `existing["api_key"] = api_key if api_key` guard. Combined with `/api/config` returning only `api_key_masked` (never `api_key`), every non-edited row in the POST body arrived with `api_key: undefined` — the backend then rewrote those rows' keys to `""`. Now `api_save_config` has three explicit cases for resolving `api_key`: (1) masked placeholder → keep stored key, (2) **missing/blank on an existing row → keep stored key (this fix)**, (3) otherwise use incoming value. Brand-new models (no `id`) still create with an empty key as before.
+- **Critical: in-app upgrade no longer falsely reports failure.** The 0.9.36 upgrade flow shared a PTY helper (`run_shell`) with the new unified Terminal tool, which — by design — returns early with a `session_id` when command output stays quiet for 3 seconds. Long-running `gem install` operations routinely hit this during dependency resolution, causing the Web UI to show `✗ Upgrade failed.` even when the gem installed successfully. `run_shell` now delegates to a new `Terminal.run_sync` Ruby API that polls until the command truly completes, and `finish_upgrade` additionally re-checks the installed gem version as a defensive fallback.
+- **Critical: "历史记录获取失败 (500: source sequence is illegal/malformed utf-8)" when opening a session.** When `file_reader` / `edit` / `grep` / `glob` encountered a file with non-UTF-8 bytes (e.g. GBK-encoded text or a Chinese Windows-exported CSV), the dirty bytes flowed through tool results into the agent history and session chunks on disk. Later, when `GET /api/sessions/:id/messages` replayed that history, `JSON.generate` would blow up on the invalid byte sequence and return 500. Now every IO source point scrubs invalid bytes to U+FFFD (`�`) at read time: `file_reader` (both content and directory entry names), `edit`, `grep` (`File.foreach` + context `readlines`), `glob` (`Dir.glob` path strings), `session_serializer` (chunk md replay), and `tool_executor` (diff preview). A defense-in-depth layer in `MessageHistory#append` / `#replace_all` recursively sanitizes every string that enters the message tree — so even a future tool that forgets to scrub cannot poison the session.
+
+### Added
+- **New `Terminal.run_sync` internal API** for Ruby callers that need synchronous command capture (drop-in replacement for `Open3.capture2e`, but using the same PTY + login-shell + Security pipeline as the AI-facing tool).
+- **DeepSeek V4 provider preset.** New `deepseekv4` entry in `Clacky::Providers` (positioned right after `openrouter`) with default model `deepseek-v4-pro` and models list `deepseek-v4-flash`, `deepseek-v4-pro`, plus the deprecated-aliases `deepseek-chat` / `deepseek-reasoner` (to be removed on 2026-07-24). Uses the OpenAI-compatible endpoint `https://api.deepseek.com`; for Anthropic-format usage, point `base_url` at `https://api.deepseek.com/anthropic` and switch `api` to `anthropic-messages`.
+- **DeepSeek V4 pricing.** Added `deepseek-v4-flash` ($0.14 in / $0.28 out / $0.028 cache-hit per MTok) and `deepseek-v4-pro` ($1.74 in / $3.48 out / $0.145 cache-hit per MTok) to `Clacky::ModelPricing::PRICING_TABLE`. Legacy aliases `deepseek-chat` and `deepseek-reasoner` normalize to `deepseek-v4-flash`. DeepSeek has no separate cache-write charge, so cache writes are billed at the cache-miss (input) rate. Prices sourced from the official pricing page (USD per 1M tokens).
+
+## [0.9.36] - 2026-04-24
+
+### Fixed
+- **Session deletion now works correctly**: fixed disk-based session deletion that was failing with proper error handling in the Web UI (C-9d1ea93)
+- **Model switching improved**: better model ID validation and normalization when switching models in Web UI — handles various ID formats correctly (C-b61e22e)
+- **Terminal tool word wrapping**: fixed terminal output word wrapping issues that could break long command outputs (C-5989d02)
+- **Heartbeat mechanism stability**: improved async heartbeat logic in server mode for more reliable connection status tracking (C-5989d02)
+
+### Improved
+- **UI polish**: removed session topbar clutter and added empty state messages for better first-time user experience (C-003d613)
+- **Cleaner logging**: reduced noisy debug logs in skill manager for quieter operation (C-c27bbec)
+
+## [0.9.35] - 2026-04-23
+
+### Added
+- **Unified Terminal tool**: merged the old `safe_shell` and `shell` tools into a single `terminal` tool with persistent PTY sessions — the agent can now keep a shell session alive across tool calls, send input to running prompts, poll long-running commands, and safely interrupt them (`Ctrl+C` / `Ctrl+D`). Replaces 1000+ lines of duplicated shell-handling logic with a cleaner, better-tested implementation.
+- **Access key authentication for server mode**: start the Web UI server with `--access-key <key>` (or `CLACKY_ACCESS_KEY` env var) to require a login before anyone can open sessions — safe to expose the Web UI over the network or to share a running instance
+- **Session debug download**: from the Web UI you can now download a full session bundle (messages, tool calls, config) as a zip for debugging or sharing — useful for bug reports and post-mortems
+- **Scheduler now saves session state**: scheduled/cron tasks now persist their session after each run, so you can inspect what the scheduled task actually did from the Web UI just like a normal session
+- **Web UI visual redesign**: substantial redesign of the sidebar, session list, settings panel, and theme — cleaner spacing, better contrast in both light and dark modes, smoother transitions
+- **Web UI & channel message interrupt**: you can now cancel an in-progress agent reply from the Web UI or from an IM channel (Feishu/WeCom/WeChat) mid-flight instead of waiting for it to finish
+- **Terminal tool UI tips**: the Web UI now surfaces helpful inline tips when the agent is running a terminal command (e.g. "waiting for input", "process still running"), making long-running commands easier to follow
+
+### Improved
+- **Smaller tool descriptions**: trimmed the system-prompt footprint of `terminal`, `browser`, and `todo_manager` tool descriptions by ~40% — fewer tokens burned on every API call, slightly faster startup, and meaningfully cheaper sessions over time
+- **Download fallback for skills & brand assets**: when the primary platform download host is unreachable (common in certain regions), the client now automatically falls back to a secondary URL — skill installs and brand asset fetches succeed in more network environments
+- **Session cost shows "N/A" for unknown-price models**: instead of displaying `$0.00` when a model's pricing isn't registered, sessions now show "N/A" so you can tell the difference between "free call" and "we don't know the cost"
+- **Faster, more accurate progress updates**: removed a delay in the progress spinner so the "Agent is thinking..." and tool-running indicators update immediately on state changes instead of a second later
+- **No Claude-specific skill auto-loading**: removed legacy logic that special-cased loading `.claude/` skills at startup — skill loading is now uniform regardless of provider, reducing surprise behavior and confusing "unknown skill" errors
+
+### Fixed
+- **`file://` links now render and open correctly** (C-5552, C-5553): file:// links are no longer stripped during streaming in the Web UI, and clicking them now opens the file via the backend (including proper foreground focus on WSL via `cmd.exe /c start`). Also fixes silent drop of `file://` links in the CLI.
+- **Idle `Ctrl+C` no longer crashes the CLI**: pressing Ctrl+C while the CLI is idle (no task running) now exits cleanly instead of raising an error
+- **Session pinned status persists correctly** (C-5556): pinning a session in the Web UI now survives server restarts and is correctly restored from disk
+- **Brand skill names follow language switch**: brand-supplied skill names in the Web UI sidebar now update immediately when you toggle the UI language (previously stuck in the initial language until reload)
+- **New sessions get the default model**: fixed a case where newly created sessions could end up on a different model than the configured default; the "lite UI" mode is no longer automatically forced either
+
+### More
+- Large refactor of the UI2 `LayoutManager` + new `OutputBuffer` for cleaner CLI output line handling
+- Agent progress-emission refactor for more consistent spinner/tool state reporting across Web, CLI, and channel UIs
+- Removed the `safe_shell_spec` and `shell_spec` suites; replaced with a single, comprehensive `terminal_spec` (500+ lines of coverage)
+
+## [0.9.34] - 2026-04-21
+
+### Added
+- **Model switcher in Web UI**: switch AI models mid-session from a dropdown in the settings panel — previously required restarting the session
+- **Advanced session creation options**: when creating a new session in Web UI, you can now configure permission mode, thinking verbosity, disable skills/tools, and choose specific models — no need to reconfigure after the session starts
+- **Session pinning**: pin important sessions to the top of the session list in Web UI for quick access — pinned sessions stay at the top regardless of recent activity
+- **Session error retry**: when a session encounters an error (network, API issue, etc.), a retry button now appears in Web UI so you can resume without restarting the entire session
+
+### Improved
+- **Error message clarity**: all LLM API errors now prefixed with `[LLM]` to distinguish AI service issues from local tool errors — makes debugging faster
+- **Skill auto-creator trigger logic**: skill auto-creation now only triggers after user task iterations (not slash commands or skill invocations) — reduces unnecessary skill creation attempts for one-off commands
+
+### Fixed
+- **System prompt injection for slash commands**: fixed system prompt duplication bug where invoking a skill via slash command (e.g., `/code-explorer`) could inject the system prompt twice, causing prompt bloat
+
+## [0.9.33] - 2026-04-20
+
+### Fixed
+- **Skill evolution targets only user skills**: auto-evolution (skill auto-creation and skill reflection) now skips default and brand skills — only user-created skills in `~/.clacky/skills/` or `.clacky/skills/` are eligible for improvement
+- **Skill auto-creation and reflection run in isolated subagents**: these background analysis tasks no longer inject messages into the main conversation history; they now fork a dedicated subagent that runs fully independently, preventing any interference with the current session
+- **User feedback prompt no longer interrupts agent flow**: removed stray `STOP.` prefix from the in-conversation user-feedback message, allowing the agent to handle feedback naturally without halting unexpectedly
+
+## [0.9.32] - 2026-04-20
+
+### Added
+- **Skill auto-evolution system**: after completing a complex task (12+ iterations) without an existing skill, the agent automatically analyzes whether the workflow is worth capturing as a reusable skill and creates one via `skill-creator` if it meets the criteria
+- **Skill reflection**: after executing a skill via slash command, the agent reflects on whether the skill's instructions could be improved and updates it automatically if concrete improvements are found
+
+### Improved
+- **Shell tool output management**: shell tool now uses `LimitStack` for output buffering — per-line character limits, total character budgets, and rolling-window line caps are all enforced in a single, well-tested utility, replacing ad-hoc truncation logic
+- **Progress display**: cleaned up progress/spinner lifecycle — all UIs (Web, CLI, UI2, channel) now use a unified `show_progress done` pattern instead of a separate `clear_progress` call, eliminating stale spinners
+
+### Fixed
+- **Thinking state bleed across sessions**: in the Web UI, a "thinking" indicator from a previous session no longer bleeds into a freshly opened session
+- **Token truncation reliability**: improved agent token-limit handling — context trimming now uses a cleaner single-pass approach and removes the dependency on per-message character counting in `MessageHistory`
+- **Skill auto-creation crash**: fixed `nil.to_a` error in `SkillAutoCreator` when conversation history contained messages without tool calls
+
+### More
+- Updated platform HTTP client fallback host for improved connectivity reliability
+
+## [0.9.31] - 2026-04-18
+
+### Added
+- GLM (智谱) model provider support — select GLM models directly from the provider settings
+- Claude Opus 4.7 model option in the built-in provider list
+- Skill Creator UI — create and edit skills from the Web interface with a visual editor
+- Interactive feedback cards — `request_user_feedback` now renders as a styled interactive card in all UIs (Web, UI2, plain), instead of plain text
+- Brand deactivation — white-label brand can now be toggled on/off from the settings page
+- Empty skill placeholder — shows a friendly message when no skills are installed yet
+
+### Improved
+- Shell tool large output handling — when a shell command waits for input or times out with large output, the output is now properly truncated and saved to temp files so the agent can still read the full content
+- Chinese UI translations expanded with new thinkverbose labels
+
+### Fixed
+- Bedrock streaming truncation recovery — when a tool call's arguments are truncated by the API, the broken assistant message is now retracted from history and the agent retries cleanly instead of crashing
+- First session scroll position in the Web UI sidebar
+- Idle status indicator in UI2
+- Channels page spacing and skill creator label alignment in Web UI
+
+## [0.9.30] - 2026-04-16
+
+### Added
+- **OpenClacky provider support**: new built-in provider preset for OpenClacky API (https://api.openclacky.com) with Claude Opus 4.6, Sonnet 4.6/4.5, and Haiku 4.5 models
+- **Session chunk index system**: compressed conversation chunks now include a searchable index with topics and turn counts — the agent can selectively load only relevant historical context instead of re-reading all compressed messages, dramatically reducing token usage in long sessions
+- **Provider availability indicator**: Web UI now shows a real-time status badge (Available/Unavailable) next to each provider in the settings modal, helping users quickly identify which services are reachable
+
+### Improved
+- **Progress streaming UX**: API call progress messages (e.g., "Agent is thinking...", compression updates) are now streamed incrementally to the Web UI with better visual feedback and reduced latency
+- **Brand name localization**: brand skill metadata now includes configurable Chinese names (`name_zh`) for better display in localized UIs
+- **Idle timer reliability**: fixed a race condition where old idle timers from previous CLI sessions could continue running after restarting, causing premature auto-saves
+
+### Fixed
+- **Prompt caching in subagents**: subagent tool calls (e.g., skills invoked via `invoke_skill`) now correctly inherit and propagate prompt caching behavior from the parent agent, reducing redundant API costs
+- **WeChat Work Ruby 3.1 compatibility**: fixed `Queue.empty?` crash on Ruby < 3.2 in WeCom channel WebSocket client (method was added in Ruby 3.2.0)
+- **WeChat markdown stripping**: incoming messages from WeChat (Weixin) now preserve original text content when stripping markdown decorators, fixing message corruption where text was accidentally removed
+
+## [0.9.29] - 2026-04-15
+
+### Added
+- **Rails deployment skill**: full end-to-end deploy workflow — create Railway project, provision Postgres, set environment variables, and deploy in one conversation
+- **Skill Chinese names**: skills can now declare a `name_zh` field; the Web UI shows the localized name when the language is set to Chinese
+- **Skill name with underscores**: skill identifiers now support underscores (e.g. `my_skill`), not just hyphens
+
+### Improved
+- **LLM request timeout**: increased from 120 s to 300 s, reducing timeouts when models output large responses or run slowly
+- **Message compressor**: compressor no longer runs when the agent is idle, avoiding unnecessary token consumption
+- **Socket reliability**: improved WebSocket and browser socket handling to prevent dropped connections under load
+- **Word (.doc) file parsing**: Linux/WSL now uses `antiword` as fallback when `strings` is unavailable, improving compatibility
+
+### Fixed
+- **Session name badge clipping**: long session names in the sidebar no longer overflow or get clipped
+- **Browser setup**: `install_browser.sh` is now automatically executed when Node.js is missing during browser setup
+- **Feishu channel setup**: retry login check up to 3 times before falling back to manual setup; fixed tab-closed error on entry; browser tool API timeout raised to 30 s
+- **Language switch rendering**: skill cards and session list now re-render correctly after switching UI language
+- **File path arguments**: argument parser now correctly handles paths with spaces and edge-case formats
+- **Agent working directory**: base prompt now reliably sets the correct working directory for all operations
+- **Feishu WebSocket reconnect**: improved reconnection logic for long-lived Feishu channel connections
+
+## [0.9.28] - 2026-04-10
+
+### Added
+- **Creator menu**: new creator-focused UI for managing brand skills and customizations
+- **Provider fallback system**: automatic fallback to secondary AI providers when primary provider fails
+- **Chinese localization**: full UI translation for skill descriptions and session lists
+- **Session scroll improvements**: better session navigation and scrolling behavior in Web UI
+- **Brand logo support**: custom logos and icons for white-label deployments
+
+### Improved
+- **Browser setup skill**: enhanced browser-setup SKILL with more detailed instructions and error handling
+- **Browser port detection**: more robust detection logic for Chrome/Edge debugging port
+
+### More
+- Test suite improvements and fixes
+
+## [0.9.27] - 2026-04-07
+
+### Added
+- **Image understanding in file_reader**: the agent can now read and analyse images (PNG, JPG, GIF, WebP) by sending them to the vision API — just attach or reference an image file
+- **Image auto-resize before upload**: large images are automatically resized to fit within model limits (max 5 MB base64), so vision requests no longer fail on high-resolution files
+- **Rails project installer script**: new `install_rails_deps.sh` script sets up a complete Ruby on Rails development environment (Ruby, Bundler, Node, Yarn, PostgreSQL) in one command
+- **Uninstall script**: new `scripts/uninstall.sh` to cleanly remove the openclacky gem and its associated files
+- **Shell script build system**: `scripts/build/` now contains a template compiler (`.sh.cc` → `.sh`) with dependency checking — install scripts are generated from composable library modules
+- **stdout streaming in Web UI**: agent tool output and shell results are now streamed live to the browser as they arrive, rather than waiting for a full response
+- **Ctrl+O shortcut in CLI**: pressing Ctrl+O in the terminal UI opens a file/output viewer for the current session
+
+### Improved
+- **Smart error recovery on 400 responses**: the agent now rolls back its message history when an API request is rejected as malformed (BadRequestError), preventing the same bad message from being replayed on every subsequent turn
+- **Brand skill reliability**: brand skills now auto-retry on transient failures and fall back gracefully if the remote skill is temporarily unavailable
+- **Shell tool RC file loading**: shell commands now correctly source `.bashrc` / `.zshrc` so user-defined aliases and environment variables are available inside tool executions
+- **Shell UTF-8 encoding**: fixed a warning about character encoding when shell output contains non-ASCII characters
+
+### Fixed
+- **Shell UTF-8 warning suppression**: eliminated noisy encoding warnings that appeared in shell tool output on some macOS setups
+
+### More
+- Lite mode configuration groundwork for clackyai platform
+- Rails new-project skill updated with improved environment checker
+- `new` skill improvements: http_server integration and tool category support
+
+## [0.9.26] - 2026-04-03
+
+### Added
+- **Long-running shell output streaming**: shell commands that run for a long time now stream output progressively to the Web UI instead of waiting until completion — no more blank screen for slow commands
+
+### Fixed
+- **Session rename for non-active sessions**: renaming a session that isn't currently active now updates immediately in the sidebar (previously required a page refresh)
+- **Feishu channel setup timeout**: increased timeout to 180s to prevent setup failures on slow networks
+- **WSL browser setup tip**: improved browser-setup skill instructions for WSL environments
+- **ARM install mirror**: install scripts now correctly use the Aliyun mirror on ARM machines
+
+## [0.9.25] - 2026-04-02
+
+### Added
+- **CSV file upload support**: you can now upload `.csv` files in the Web UI — agent can read and analyse tabular data directly
+- **Browser install tips**: when a browser-dependent command fails, the agent now shows a clear install tip with instructions to set up Chrome/Edge, rather than a cryptic error
+- **Auto-focus on file upload dialog**: the file input field is now auto-focused when the upload dialog opens, improving keyboard UX
+- **Session ID search in Web UI**: you can now search sessions by session ID in addition to session name
+
+### Fixed
+- **WeChat (Weixin) file upload**: fixed a bug where file attachments sent via WeChat were not correctly forwarded to the agent
+- **WeChat without browser**: WeChat channel now works even when no browser tool is configured — falls back gracefully
+- **API message timeout**: fixed a race condition in message compression / session serialisation that could cause API requests to time out mid-conversation
+- **Session chunk replay**: fixed a bug where streaming (chunk-based) messages were incorrectly replayed when restoring a session
+
+### Improved
+- **Shell tool robustness**: `pkill` commands are now scope-limited to prevent accidental process kills; server process cleans up properly when the terminal is closed
+- **Broken pipe handling**: improved error handling in the HTTP server and shell tool to avoid noisy broken-pipe errors on abrupt connection close
+
+### More
+- Updated product-help skill with new session search and CSV upload documentation
+- Updated channel-setup skill with improved WeChat non-browser setup guide
+
+## [0.9.24] - 2026-04-02
+
+### Added
+- **New session list & search in Web UI**: sidebar now shows full session history with real-time search — find any past conversation instantly
+- **Session type indicators**: sessions are labeled by type (chat / agent) so you can see at a glance what kind of interaction it was
+- **Image lightbox**: click any image in the chat to expand it full-screen with a clean overlay viewer
+- **Session history replay for streaming messages**: chunk-based (streaming) messages are now fully replayed when revisiting a past session
+- **Xiaomi AI provider**: added Xiaomi as a supported AI provider
+- **Chinese Bing web search**: web search now uses cn.bing.com for users in China, improving search relevance and reliability
+- **Auto-install system dependencies script**: agent can now automatically install missing system packages (Node, Python, etc.) via a bundled `install_system_deps.sh` script
+- **User message timestamps**: each user message now displays the time it was sent
+
+### Fixed
+- **Bedrock file attachments & partial cost tracking**: fixed file handling and cost accumulation for AWS Bedrock sessions
+- **Session name timestamp**: fixed incorrect timestamp display on session names
+- **New session scroll**: new sessions now correctly scroll to the latest message
+- **Feishu WebSocket client crash**: fixed a nil-reference error that caused the Feishu WS client to crash on reconnect
+
+## [0.9.23] - 2026-04-01
+
+### Improved
+- **API client model parameter propagation**: the Client class now accepts and uses an explicit model parameter, enabling better model detection and API routing across all client instantiation points (CLI, agent, subagent)
+- **Bedrock API detection**: improved detection of Bedrock Converse API usage by checking both API key prefix (ABSK) and model prefix (abs-), providing more robust handling of Bedrock models
+
+### Fixed
+- **CLI -c option model initialization**: fixed a bug where the CLI command with -c option was not passing the model name to the client, causing routing failures for certain providers
+
+### More
+- ClackyAI provider updated to use the latest model name format (abs- prefix)
+
+## [0.9.22] - 2026-03-31
+
+### Added
+- **ClackyAI provider (Bedrock with prompt caching)**: added `clackyai` as a first-class provider — uses AWS Bedrock under the hood with prompt caching enabled, normalising token usage to Anthropic semantics so cost calculation works correctly
+- **Browser auto-install script**: `browser-setup` skill can now detect the Chrome/Edge version and automatically download and run the install script, reducing manual setup steps
+
+### Fixed
+- **Feishu setup timeout**: `navigate` method was using `open` (new tab) instead of `navigate` (current tab), causing intermittent timeouts on macOS when opening feishu.cn
+- **Cron task schedule YAML format**: fixed a YAML serialisation bug in the scheduler that produced invalid schedule files
+
+## [0.9.21] - 2026-03-30
+
+### Fixed
+- **Feishu channel setup compatibility with v2.6**: fixed Ruby 3.1 syntax incompatibility in the Feishu setup script that caused failures on newer Feishu API versions
+
+### Improved
+- **skill-creator YAML validation**: added frontmatter schema validation for skill files, catching malformed skill definitions before they cause runtime errors
+
+### More
+- Removed `install_simple.sh` (consolidated into `install.sh`)
+
+## [0.9.20] - 2026-03-30
+
+### Added
+- **SSL error retry**: LLM API calls now automatically retry on SSL errors (same as other network failures — up to 10 retries with 5s delay)
+
+### Fixed
+- **Brand wrapper not found under root**: the install script now places the brand command wrapper in the same directory as the `openclacky` binary, so it is always on PATH regardless of whether running as root or a normal user
+
+### Improved
+- **Cron task management refactored to API**: cron task CRUD operations now go through the HTTP API instead of running ad-hoc Ruby scripts, making the scheduler more reliable and easier to maintain
+- **UTF-8 encoding fix for browser tool on Windows**: browser command output with non-ASCII characters no longer causes encoding errors
+
+### More
+- Installer no longer adds `~/.local/bin` to PATH (wrapper now colocated with gem binary, making the extra PATH entry unnecessary)
+- Brand install tips in Windows PowerShell installer
+
+## [0.9.19] - 2026-03-29
+
+### Added
+- **Bing search engine support**: the web search tool now supports Bing in addition to DuckDuckGo and Baidu — improves search coverage and fallback reliability
+- **WSL1 fallback for Windows installer**: the PowerShell installer now automatically falls back to WSL1 when WSL2/Hyper-V is unavailable, ensuring installation succeeds on older or constrained Windows machines
+- **Upgrade via OSS (CN mirror)**: the upgrade flow now downloads new gem versions from Tencent OSS, making upgrades faster and more reliable for users in China
+
+### Fixed
+- **WeChat (Weixin) context token refresh**: the WeChat channel adapter now correctly refreshes the access token when it expires, preventing message delivery failures
+- **DOCX parser UTF-8 encoding bug**: parsing `.docx` files with non-ASCII content no longer causes encoding errors
+- **WSL version detection broadened**: installer now correctly handles old inbox `wsl.exe` (exit code -1) in addition to "feature not enabled" (exit code 1)
+- **Ctrl+C handling in UI**: Ctrl+C now correctly interrupts the current operation without leaving the UI in a broken state
+- **Layout scrollback double-render**: fixed a UI rendering issue that caused the scrollback buffer to render twice
+
+### More
+- Support custom brand name in Windows PowerShell installer
+- Redesigned Windows registration flow; removed Win10 MSI dependency
+
+## [0.9.18] - 2026-03-28
+
+### Fixed
+- **Brand skill config now reloads from disk on every `load_all`**: brand skills installed or activated after the initial startup were previously invisible until restart — the skill loader now refreshes `BrandConfig` each time it loads skills, so newly installed brand skills take effect immediately
+
+### More
+- Remove `private` keyword from all internal classes to improve Ruby 2.6 compatibility
+- Rename `install.sh` → `install_full.sh`; promote `install_simple.sh` → `install.sh` as the default entry point
+
+## [0.9.17] - 2026-03-27
+
+### Added
+- **Browser screenshots now saved to disk**: every screenshot action automatically saves both the original full-resolution PNG and the compressed (800px) version to disk — the agent reports both file paths so you can reference, open, or pass the screenshots to other tools
+- **Provider "Get API Key" links in onboarding**: the setup wizard now shows a direct link to the provider's website when you select a provider that has a `website_url` — making it easier to sign up and get your API key without leaving the flow
+
+### Fixed
+- **WebSocket auto-reconnect for Feishu and WeCom channels**: the WebSocket clients for Feishu and WeCom now automatically retry the connection after failures — channels stay online without manual intervention after a network hiccup
+- **Brand command in simple install script**: the `clacky` brand command was incorrectly invoked in `install_simple.sh` — now fixed so the post-install branding step runs correctly
+- **Windows WSL2 and Hyper-V detection in PowerShell installer**: improved detection logic for WSL2 and Hyper-V environments in `install.ps1`, reducing false negatives on Windows machines with non-standard configurations
+
+## [0.9.16] - 2026-03-27
+
+### Fixed
+- **Skill templates now expand `${ENV_VAR}` placeholders**: skill SKILL.md files can reference environment variables like `${CLACKY_SERVER_HOST}` and `${CLACKY_SERVER_PORT}` — they are now automatically substituted at load time (unknown variables are left as-is)
+- **gemrc restored to default when switching from CN to global network**: the install script now correctly restores the system gemrc when the user switches from China mirror mode to the global network, preventing stale mirror configuration from persisting
+
+## [0.9.15] - 2026-03-27
+
+### Improved
+- **CN install now downloads gem from OSS mirror**: Chinese users no longer hit RubyGems.org or GitHub during installation — the install script fetches the `.gem` file directly from `oss.1024code.com` and installs dependencies via Aliyun mirror, making installs faster and more reliable in mainland China
+
+## [0.9.14] - 2026-03-27
+
+### Fixed
+- **rubyzip Ruby 2.6 compatibility**: replaced `if RUBY_VERSION >= "3.0"` conditional in gemspec (evaluated at build time, ineffective at install time) with `~> 2.4.1` pin — RubyGems now correctly selects rubyzip 2.4.1 when installing on Ruby 2.6
+
+## [0.9.13] - 2026-03-27
+
+### Added
+- **Ruby 2.6 compatibility**: the gem now installs cleanly on Ruby 2.6 (including macOS system Ruby 2.6.x) — dependency version constraints for `faraday` and `rouge` are now capped so RubyGems automatically selects compatible versions on older Ruby environments
+
+### Fixed
+- **WebSocket pure-Ruby replacement**: replaced the native WebSocket dependency with a pure-Ruby implementation to improve cross-platform compatibility
+- **Ctrl+C warning in UI suppressed**: fixed a spurious warning printed to the terminal when pressing Ctrl+C in the interactive UI
+- **Parser stderr pollution from Bundler warnings filtered**: Ruby/Bundler version warnings no longer contaminate parser error messages
+
+## [0.9.12] - 2026-03-27
+
+### Added
+- **Improved Anthropic prompt cache hit rate (2-point caching)**: the last 2 eligible messages are now marked for caching instead of 1, so Turn N's cached prefix is still a hit in Turn N+1 — significantly reducing API costs for long sessions
+
+### Improved
+- **Ruby 2.6+ and macOS system Ruby compatibility**: the gem now works with the macOS built-in Ruby (2.6) and LibreSSL — includes polyfills for `filter_map`, `File.absolute_path?`, `URI.encode_uri_component`, and a pure-Ruby AES-256-GCM fallback for LibreSSL environments where native OpenSSL GCM is unavailable
+- **Install script streamlined for China**: the installer is now significantly simplified and more reliable for users in China — direct Alibaba Cloud mirror for RubyGems, plus a dedicated CN-optimized install path
+- **Compression no longer crashes when system prompt is frozen**: fixed a bug where message compression would raise `FrozenError` by mutating the shared system prompt object — it now safely duplicates the string before modification
+
+### Fixed
+- **Compression crash on frozen system prompt**: `MessageCompressor` now calls `.dup` on the system prompt before injecting the compression instruction, preventing `FrozenError` in long sessions
+
+## [0.9.11] - 2026-03-25
+
+### Added
+- **Network-aware installer mirrors**: the install script now automatically detects whether you're in China and picks the fastest mirror (RubyGems China mirror, GitHub, etc.) — no manual configuration needed
+- **Shell rc-file loading**: the shell tool now sources your `.zshrc` / `.bashrc` so commands that depend on environment variables or aliases set in your shell profile work correctly
+
+### Improved
+- **Browser tool `evaluate` targets active page**: JavaScript evaluation now automatically targets the currently active browser tab instead of the last opened one, so `evaluate` always runs in the right context
+- **Browser MCP process cleaned up on server shutdown**: the `chrome-devtools-mcp` node process is now stopped when the server shuts down, preventing orphaned processes that held onto port 7070
+- **Server worker process isolation**: workers are now spawned in their own process group, ensuring grandchild processes (e.g. browser MCP) are fully cleaned up during zero-downtime restarts
+- **Channel status via live API**: `channel status` now queries the running server API instead of reading `~/.clacky/channels.yml` directly, so it reflects the actual runtime state
+- **Idle compression timer race fix**: the compression thread is now registered inside a mutex before starting, eliminating a race where `cancel()` could miss an in-flight compression and leave history in an inconsistent state
+- **Compression token display accuracy**: the post-compression token count now uses the rebuilt history estimate instead of the stale pre-compression API count
+- **Shell process group signals**: `SIGTERM`/`SIGKILL` are now sent to the entire process group (`-pgid`) instead of just the child PID, ensuring backgrounded subprocesses are also killed on timeout
+
+### Fixed
+- **Task error session save**: sessions are now correctly saved to disk even when a task ends with an error, preventing session loss on agent failures
+- **History load and model load bugs**: fixed crashes when loading sessions with missing or malformed history/model fields
+- **Default model updated to Claude claude-sonnet-4-6**: bumped the default Gemini model reference from `gemini-2.5-flash` → `gemini-2.7-flash`
+
+### More
+- Renamed gem references from `open-clacky` to `openclacky` across docs, gemspec, and scripts
+
+## [0.9.10] - 2026-03-24
+
+### Added
+- **One-click gem upgrade in Web UI**: a new "Upgrade" button in the Web UI lets you update Clacky to the latest version without touching the terminal
+- **WebSocket connection status tips**: the Web UI now shows a clear indicator when the WebSocket connection is lost or reconnecting, so you always know if the server is reachable
+- **Master/worker server architecture**: the server now runs in a master + worker process model, enabling zero-downtime gem upgrades — the master restarts workers seamlessly after an upgrade
+
+### Fixed
+- **Relative paths in write/edit tools**: paths like `./foo/bar.rb` are now correctly resolved relative to the working directory instead of the process root, preventing unexpected file placement
+
+## [0.9.9] - 2026-03-23
+
+### Added
+- **Real-time skill loading in Web UI**: the `/skill` autocomplete now fetches the live skill list on every trigger, so newly installed or updated skills appear immediately without a page reload
+- **Skill source type in autocomplete**: each skill in the autocomplete now carries its source type (default / user / project / brand), making it easy to see where a skill comes from
+- **Browser configure API**: a new `POST /api/browser/configure` endpoint writes `browser.yml` and hot-reloads the browser daemon — the browser-setup skill now configures the browser in one step without manual file editing
+- **Brand skill path confidentiality**: temporary script paths used by encrypted brand skills are now hidden from the agent's output and never disclosed to the user
+
+### Improved
+- **Stale brand skills cleared on license switch**: activating a new license now automatically removes encrypted skill files from the previous brand, preventing decryption errors and stale skill behaviour
+- **Brand skill confidentiality enforcement**: the system prompt and per-skill injection both include an explicit notice that internal script paths are runtime details and must never be shown to the user
+- **Rebind license confirmation**: re-binding a license in Settings now shows a confirmation dialog before proceeding, preventing accidental license changes
+
+### Fixed
+- **HTTP server spec stability**: fixed flaky test assertions in `http_server_spec.rb` that caused intermittent CI failures
+
+### More
+- Updated `gem-release` skill with improved CHANGELOG writing guidelines
+
+## [0.9.8] - 2026-03-23
+
+### Added
+- **Real browser automation via CDP**: the browser tool now drives a real Chromium browser using the Chrome DevTools Protocol — structured action schemas, snapshots, screenshots, and full page interaction are all supported
+- **Browser DevTools MCP integration**: the browser connects to Chrome's DevTools via MCP, enabling deeper inspection and control beyond standard WebDriver capabilities
+- **Browser manager in Web UI**: a new browser management panel lets you start, stop, restart, and monitor the connected browser session directly from the Web UI
+- **WeChat (Weixin) channel support**: the agent can now receive and reply to messages via WeChat, including sending and receiving images
+- **Feishu Docs integration**: the agent can now read and process Feishu (Lark) documents directly as context
+- **PDF preview in Web UI**: PDFs attached to a conversation now render inline in the chat interface
+- **Session source tracking**: sessions now track where they originated (Web UI, Feishu, WeCom, WeChat, CLI) and display the source in the sessions list
+- **Sessions list in Web UI**: a dedicated sessions UI shows all your recent conversations with source badges and load-more pagination
+- **Setup session type**: a special onboarding session type is available to guide new users through initial configuration
+- **Personal website skill**: a built-in skill that generates and publishes a personal profile page (linktree-style) from your user profile
+- **Sub-directory `.clackyrules` loading**: project rules files in subdirectories are now discovered and merged automatically
+- **Self-improving response parser**: the parser now repairs itself when it encounters malformed tool-call sequences, improving reliability with all models
+- **UJK format support**: the agent can now handle UJK-encoded content in file and channel inputs
+- **Browser toggle in Web UI**: a toggle in the settings sidebar lets you enable or disable browser control without restarting
+- **Logo and QR code on homepage**: the Web UI homepage now displays the product logo and a shareable QR code
+- **Clear thinking in channel**: channel messages now strip internal `<thinking>` blocks before sending the reply to the user
+
+### Fixed
+- **`invoke_skill` tool-call sequence**: skill invocations via tool call now correctly follow the expected request/response order, preventing out-of-sequence tool results
+- **URI parsing for edge cases**: fixed a crash when parsing certain malformed or unusual URIs
+- **Doc reader parsing**: fixed an issue where some document formats were not correctly parsed by the doc reader tool
+- **Zip skill location discovery**: fixed skill loading from zip files installed in non-standard locations
+- **Install script compatibility**: the install script now explicitly uses bash to avoid failures on systems where `/bin/sh` is not bash
+
+### More
+- Rename `working` → `thinking` in agent status display
+- Channel and Web UI now sync session state in real time
+- Cost usage display improvements
+
+## [0.9.7] - 2026-03-20
+
+### Added
+- **AWS Bedrock support**: the agent can now use Claude models hosted on AWS Bedrock (including the Japan region `bedrock-jp` provider with `jp.anthropic.claude-sonnet-4-6` and `jp.anthropic.claude-haiku-4-6`)
+- **Brand skill confidentiality protection**: when a brand skill is injected, the agent is now instructed to never reveal, quote, or paraphrase the skill's proprietary instructions — keeping white-label content secure
+- **Slash command guard in skill injection**: skills invoked via `/skill-name` commands now include a system notice that prevents the agent from calling `invoke_skill` a second time for the same request
+- **"Show system skills" toggle in Web UI**: the Skills settings page now has a checkbox to show or hide built-in system skills, making it easier to find your own custom skills in a long list
+
+### Fixed
+- **Shell commands with non-UTF-8 output no longer crash**: output from commands that produce GBK, Latin-1, or binary bytes (e.g. some `cat` or legacy tool output) is now safely transcoded to UTF-8 instead of raising an encoding error
+- **Task interruption no longer duplicates or garbles output**: a non-blocking progress-clear path ensures the user's message appears immediately on screen when a task is interrupted, without leaving stale progress lines behind
+- **Terminal inline content resize no longer overflows into the fixed toolbar area**: when an inline block grows past the available output rows, the terminal now scrolls correctly instead of writing into the status bar region
+- **Brand skills always show the latest version**: the skills list in the Web UI now correctly reflects the most recent version of a brand skill after an update
+
+### More
+- Rename brand skill `slug` field to `name` for consistency across the codebase
+- Rename `brandname` → `productname` in brand config internals
+- Unify skill injection into a shared `inject_skill_as_assistant_message` method
+- Update built-in skill definitions
+
+## [0.9.6] - 2026-03-18
+
+### Added
+- **Environment-aware context injection**: the agent now automatically detects your OS, desktop environment, and screen info and includes it in every session — so it can give OS-specific advice without you having to explain your setup
+- **File attachments via IM channels**: you can now send images and documents directly through Feishu or WeCom to the agent, which processes them just like files sent via the Web UI
+- **Unified file attachment pipeline for Web UI**: images and Office/PDF documents can now be attached in the web chat interface with automatic image compression before upload
+- **Skills can now be installed from local zip files**: `skill-add` now accepts a local file path (not just a URL), so you can install skills from a downloaded zip without hosting it anywhere
+- **Skill import bar in Web UI**: the Skills settings page now has an import bar where you can paste a URL or upload a local zip file directly — no terminal needed to install new skills
+- **`$SKILL_DIR` available in skill instructions**: skill files can now reference `$SKILL_DIR` to get the absolute path to their own directory, making it easy to reference supporting files with correct paths
+- **`product-help` built-in skill**: the agent can now answer questions about Clacky's own features, configuration, and usage through a dedicated built-in skill
+
+### Fixed
+- **PDF and Office files now appear in glob results**: file discovery tools no longer skip `.pdf`, `.docx`, and other document formats — they show up correctly in file listings
+- **Chat history visible after message compression**: sessions where all user messages were compressed no longer show a blank history — prior conversation is now correctly replayed
+- **Stale message reference in task history**: an internal bug (`@messages` vs `@history`) that could cause incorrect task history in compressed sessions is fixed
+- **File-only messages handled correctly in channel UI**: sending a file without text via IM channels no longer causes a display issue in the channel UI
+- **WeCom WebSocket client stability**: fixed async dispatch and frame acknowledgment in the WeCom WS client to reduce dropped messages and connection issues
+- **Session serializer variable fix**: corrected a stale variable reference in session replay that could cause errors when restoring sessions
+- **`web_fetch` compatibility improved**: better request headers make web page fetching more reliable across more sites
+- **Reasoning content preserved in API messages**: `reasoning_content` fields are no longer stripped from messages, fixing potential issues with reasoning-capable models
+
+### More
+- Markdown links in chat now open in a new tab
+- Removed public skill store tab from the Skills panel (store content is now integrated differently)
+- Reduce WebSocket ping log noise in HTTP server
+- Centralize message cleanup logic in `MessageHistory`
+
+## [0.9.5] - 2026-03-17
+
+### Added
+- **License activation now navigates directly to Brand Skills tab**: after entering a valid license key, the UI automatically opens the Brand Skills settings tab — no extra steps needed to find and load your skills
+- **Version badge always clickable**: clicking the version number in the sidebar now always works regardless of update state; when already on the latest version, a small "up to date" popover appears and auto-dismisses
+
+### Improved
+- **MessageHistory domain object**: agent message handling is now encapsulated in a dedicated `MessageHistory` class, making the codebase cleaner and message operations (compression, caching, transient marking) more reliable and testable
+- **Brand skill isolation via transient message marking**: brand skill subagent calls no longer spin up a separate isolated agent; instead, messages are marked as transient and stripped after the call — simpler architecture with the same isolation guarantees
+- **License activation flow simplified**: the `activate-license` skill is replaced with direct in-UI navigation and settings highlighting, reducing round-trips and making activation feel more native
+
+### Fixed
+- **Tilde (`~`) in file paths now expanded correctly**: tool preview checks now expand `~` to the home directory before checking file existence, so paths like `~/Documents/file.txt` no longer falsely report as missing
+- **Subagent with empty arguments no longer crashes**: when a skill invocation passes empty arguments, a safe placeholder message is used instead of raising an error
+- **Version popover shows "up to date" state**: clicking the version badge when already on the latest version now shows a friendly confirmation instead of silently falling through to open the settings panel
+
+### More
+- Simplify error messages in brand config decryption
+- Update test matchers to match simplified error messages
+
+## [0.9.4] - 2026-03-16
+
+### Fixed
+- **Prompt cache strategy reverted to simple last-message anchoring**: the experimental assistant-message-anchored cache strategy introduced in v0.9.3 was causing regressions; caching is now restored to a simpler, proven approach where the last message is used as the cache breakpoint
+
+## [0.9.3] - 2026-03-16
+
+### Added
+- **Brand logo banner on web server startup**: a styled block-font logo now displays in the terminal when `clacky server` launches, giving a polished startup experience
+- **BlockFont renderer replaces artii dependency**: the gem now ships its own high-quality block-font engine for rendering large ASCII logos, removing the external `artii` dependency and enabling full offline use
+- **Hover-to-expand token usage and session info bar**: hovering over the token usage line or session info bar in the WebUI now expands it to show full details, keeping the UI compact by default
+- **Redesigned setup panel with Back button and Custom provider support**: the model setup flow now includes a Back button for navigation and a dedicated "Custom provider" path, making it easier to configure non-standard API endpoints; also fixes a dropdown re-entry bug
+- **License activation via non-blocking top banner**: the brand activation flow no longer blocks the entire UI with a full-screen panel — it now shows a slim top banner, and activation is handled through a dedicated skill
+- **`startSoulSession` exposed on Onboard public interface**: third-party integrations can now trigger soul session initialization directly from the onboard module
+
+### Improved
+- **Browser tool simplified and config-driven**: the browser tool setup is now handled through a unified config object, removing ~250 lines of complex auto-restart logic and making the tool more predictable and maintainable
+- **Prompt caching more stable**: cache anchoring now uses the last assistant message as the stable boundary, reducing cache misses caused by system prompt variations; caching is correctly restored for both Anthropic and OpenRouter paths
+- **Message format extracted to dedicated modules**: OpenAI and Anthropic message formatting now live in separate modules (`Clacky::MessageFormat::OpenAI` and `Clacky::MessageFormat::Anthropic`), making the client code easier to read and test
+- **WeCom channel reliability**: auth failure handling is improved with proper reconnection logic; the `channel-setup` skill guidance is also updated for clarity
+- **Install script and license expiry handling**: the install script is streamlined, license-expired states are handled gracefully, and encrypted skills are decrypted at load time
+
+### Fixed
+- **Prompt cache stability across turns**: cache was occasionally invalidated between turns due to message boundary drift; now anchored reliably to the last assistant message
+- **`request_user_feedback` missing from session history replay**: feedback prompts sent during a session were not rendered when replaying history in the WebUI; they now appear correctly as assistant messages
+- **Brand activation banner not shown when API key is missing**: the banner now correctly appears even when no API key is configured, with a translated skip warning
+- **Zip extraction security**: zip files are now read in chunks with size verification, preventing potential zip-bomb or oversized-file issues
+
+### More
+- Remove browser tool auto-restart logic that was causing instability in headless environments
+- Add security design documentation
+
+## [0.9.2] - 2026-03-15
+
+### Fixed
+- **Version upgrade button now appears reliably**: the new version check now queries RubyGems directly instead of relying on local gem mirror sources (which often lag behind by hours or days), so the upgrade badge shows up promptly when a new version is available. Falls back to the local mirror if RubyGems is unreachable.
+- **Edit confirmation diff output restored**: the file diff was not displaying correctly when the input area paused during an edit confirmation prompt; this is now fixed.
+
+## [0.9.1] - 2026-03-15
+
+### Added
+- **Session context auto-injection**: the agent now automatically injects the current date and active model name into each conversation turn, so it always knows what day it is and which model it's running — helpful for time-sensitive tasks and multi-model setups
+- **Kimi/Moonshot extended thinking support**: reasoning content is now preserved and echoed back correctly in message history, fixing HTTP 400 errors when using Kimi's extended thinking API
+
+### Improved
+- **Browser tool install UX**: the `agent-browser` setup flow has been redesigned with a dedicated install script and clearer guidance, making first-time setup smoother
+
+## [0.9.0] - 2026-03-14
+
+### Added
+- **Version check and one-click upgrade in WebUI**: a version badge in the sidebar shows when a newer gem is available; clicking it opens an upgrade popover with a live install log and a restart button — no terminal needed
+- **Upgrade badge state machine**: the badge cycles through four visual states — amber pulsing dot (update available), spinning ring (installing), orange bouncing dot (restart needed), green check (restarted successfully)
+- **Markdown rendering in WebUI chat**: assistant responses are now rendered as rich markdown — headings, bold, code blocks, lists, and inline code are all formatted properly instead of displayed as raw text
+- **Session naming with auto-name and inline rename**: sessions are automatically named after the first exchange; users can double-click any session in the sidebar to rename it inline
+- **Session info bar with live status animation**: a slim bar below the chat header shows the session name, working directory, and a pulsing animation while the agent is thinking or executing tools
+- **Restore last 5 sessions on startup**: the WebUI now reopens the five most recent sessions on startup instead of just the last one
+- **Image and file support for Feishu and WeCom**: users can now send images and file attachments through Feishu and WeCom IM channels; the agent reads and processes them like any other input
+- **Idle compression in WebUI**: the agent now compresses long conversation history automatically when the session has been idle, keeping context efficient without manual intervention
+
+### Improved
+- **Glob tool recursive search**: bare pattern names like `controller` are now automatically expanded to `**/*controller*` so searches always return results across all subdirectories
+- **Onboard flow**: soul setup is now non-blocking; the confirmation page is skipped for a faster first-run experience; onboard now asks the user to name the AI first, then collects the user profile
+- **Token usage display ordering**: the token usage line in WebUI now always appears below the assistant message bubble, not above it
+- **i18n coverage**: settings panel dynamically-rendered fields are now translated correctly at render time
+
+### Fixed
+- **Upgrade popover stays open during install and reconnect**: the popover is now locked while a gem install or server restart is in progress, preventing accidental dismissal that would leave the badge stuck in a spinning state
+- **Session auto-name respects default placeholders**: session names are now assigned based on message history only, not the agent's internal name field, so placeholder names like "Session 1" no longer block the auto-naming logic
+- **Token usage line disappears after page refresh**: token usage data is now persisted in session history and correctly re-rendered when the page is reloaded
+- **Shell tool hangs on background commands**: commands containing `&` (background operator) no longer cause the shell tool to block indefinitely
+- **White flash on page load**: the page is now hidden until boot completes, preventing a flash of unstyled content or the wrong view on startup
+- **Theme flash on refresh**: the theme (dark/light) is now initialized inline in `<head>` so the correct colours are applied before any content renders
+- **Onboard flash on reload**: the onboard panel no longer briefly appears when a session already exists during soul setup
+
+### More
+- Rename channels "Test" button to "Diagnostics" for clarity
+- Default-highlight the first item in skill autocomplete
+
+## [0.8.8] - 2026-03-13
+
+### Added
+- **i18n system with zh/en runtime switching**: WebUI now supports Chinese and English; all UI text is served through an `I18n` module and switches instantly without a page reload
+- **Onboard language selection step**: first-time setup now opens with a language picker (中文 / English) before any configuration, so the entire onboard experience is conducted in the user's chosen language
+- **Onboard "what's your name" step**: onboard flow now asks for the user's preferred name early on and addresses them by name throughout the rest of the setup
+- **Chinese SOUL.md default**: when a user onboards in Chinese and skips the soul-setup conversation, a Chinese-language SOUL.md is written automatically so the assistant responds in Chinese by default
+
+### Fixed
+- **Onboard WS race condition**: fixed a bug where the first auto-triggered `/onboard` command was silently lost — the WebSocket `session_list` event arrived before the session view was active and redirected the UI to the welcome screen, hiding the agent's response
+
+## [0.8.7] - 2026-03-13
+
+### Added
+- **PDF file upload and reading**: users can now upload PDF files directly in the WebUI chat; the agent reads and analyzes the content via the built-in `pdf-reader` skill
+- **WebUI favicon and SVG icons**: browser tab now shows the Clacky icon
+- **Public skill store install**: skills from the public store can be installed directly via the WebUI without a GitHub URL
+- **Auto-kill previous server on startup**: launching `clacky serve` now automatically kills any previously running instance via pidfile, preventing port conflicts
+
+### Improved
+- **Brand skill loading speed**: loading brand skills no longer triggers a network decryption request — name and description are now read from the local `brand_skills.json` cache, making New Session significantly faster
+- **Memory update UX**: memory update step now shows a spinner and info-style message instead of a bare log line
+- **Browser snapshot output**: snapshot output is compressed to reduce token cost when the agent uses browser tools
+- **Subagent output**: subagent task completion now shows a brief info line instead of a full "Task Complete" block, reducing noise in the parent agent's context
+
+### Fixed
+- **Subagent token delta on first iteration**: subagent now inherits `previous_total_tokens` correctly, fixing an inflated token count on the first tool iteration
+- **Chrome DevTools inspect URL**: updated the remote debugging URL to include the `#remote-debugging` fragment for correct navigation
+- **Shell output token explosion**: long lines in shell output are now truncated to prevent excessive token usage
+
+### More
+- Binary file size limit lowered from 5 MB to 512 KB to reduce accidental token cost
+- `kill_existing_server` logic moved from CLI into `HttpServer` for cleaner separation
+- Browser tool prefers `snapshot -i` over `screenshot` for lower token cost
+- Cross-platform PID file path using `Dir.tmpdir` instead of hardcoded `/tmp`
+
+## [0.8.6] - 2026-03-12
+
+### Added
+- **Channel system with Feishu & WeCom support**: integrated IM platform adapters — agents can now receive and reply to messages via Feishu (WebSocket) and WeCom channels
+- **Skill encryption (brand skills)**: brand skills can be distributed as encrypted `.enc` files, decrypted on-the-fly using license keys; includes a full key management and manifest system
+- **Cron task creator & skill creator default skills**: two new built-in skills for creating scheduled tasks and new skills directly from chat
+- **Image messages in session history restore**: session restore now correctly replays image-containing messages, including thumbnail display in the UI
+- **Skill auto-upload to cloud**: skills can be uploaded to the cloud store from within the UI
+
+### Improved
+- **WeCom setup flow**: improved step-by-step WeCom channel configuration UX (#11)
+- **Skill autocomplete UI**: enhanced slash-command autocomplete interaction — better keyboard navigation, input behavior, and visual feedback (#6)
+- **Chrome setup UX**: simplified Chrome installation flow with improved error messages and progress indicators (#8)
+- **WebUI colors and layout**: polished light/dark mode colors, sidebar alignment, and badge styles for a more consistent look
+- **Test suite speed**: `CLACKY_TEST` guard prevents brand skill network calls during tests — suite now runs ~60× faster per example
+
+### Fixed
+- **Duplicate user bubble on skill install**: prevented an extra chat bubble appearing when installing a skill from the store
+- **Image thumbnails in session replay**: restored missing image thumbnails when replaying historical sessions
+- **WebUI permission mode**: Web UI sessions now correctly use `confirm_all` permission mode
+- **Feishu WS log noise**: removed emoji characters from WebSocket connection log messages
+
+### More
+- Subagent memory update disabled to reduce noise
+- Ping request `max_tokens` bumped from 10 to 16
+- WebUI updated to use new cron-task-creator and skill-creator skills
+
+## [0.8.5] - 2026-03-11
+
+### Fixed
+- **SSL connection on mise/Homebrew Ruby**: disabled SSL certificate verification in Faraday HTTP client to fix `SSL_connect` errors that affected users who installed Ruby via `mise` + Homebrew on macOS (where the system CA bundle is not linked automatically)
+- **ChannelManager startup crash**: fixed `NoMethodError` for undefined `Clacky.logger` — now correctly calls `Clacky::Logger`
+
+## [0.8.4] - 2026-03-10
+
+### Added
+- **License verify & download skills**: brand distribution can now push skills to clients via license heartbeat — skills are downloaded and installed automatically on activation and heartbeat
+- **Web UI theme system**: dark/light mode toggle with full CSS variable theming, persistent across sessions; all UI components (sessions, tasks, settings) updated to use theme variables
+
+### Improved
+- **Skill loader default agent**: `SkillLoader` now applies a sensible default agent value, simplifying skill configuration for common cases
+- **Web UI modernized**: redesigned session and task lists with active indicators, improved hover effects, and inline SVG icons (removed Lucide CDN dependency)
+
+### Fixed
+- **UTF-8 input handling**: invalid UTF-8 bytes in terminal UI input and output are now scrubbed cleanly instead of raising encoding errors
+- **UI thread deadlock**: progress and fullscreen threads now stop gracefully on shutdown, preventing rare deadlocks
+- **IME composition input**: slash `/` command button is now disabled during IME composition (e.g. Chinese input), preventing double-submit on Enter
+- **CLI `clear` command**: fixed a regression that broke the `clacky clear` command
+
+### More
+- Refactor: rename `set_skill_loader` to `set_agent` in `UiController` for clarity
+- Chore: update onboard skill default AI identity wording
+- Fix: append user shim after skill injection for Claude API compatibility
+
+## [0.8.3] - 2026-03-09
+
+### Added
+- **Slash command skill injection**: skill content is now injected as an assistant message for all `/skill-name` commands, giving the agent full context of the skill instructions at invocation time
+- **Collapsible `<think>` blocks** in web UI: model reasoning enclosed in `<think>…</think>` tags is rendered as a collapsible "Thinking…" section instead of raw text
+
+### Improved
+- **Web UI settings panel**: refined layout and styles for the settings modal
+- **Session state restored on page refresh**: "Thinking…" progress indicator and error messages are now restored from session status after a page reload instead of disappearing
+
+### Fixed
+- **AgentConfig shallow-copy bug**: switching models in Settings no longer pollutes existing sessions — `deep_copy` (JSON round-trip) is now used everywhere instead of `dup` to prevent shared `@models` hash mutation across sessions
+
+## [0.8.2] - 2026-03-09
+
+### Added
+- **Skill count limits**: two-layer guard to keep context tokens bounded — at most 50 skills loaded from disk (`MAX_SKILLS`) and at most 30 injected into the system prompt (`MAX_CONTEXT_SKILLS`); excess skills are skipped and a warning is written to the file logger
+
+### Improved
+- Skill `agent` field is now self-declared in each `SKILL.md` instead of being listed in `profile.yml` — makes skill-to-profile assignment portable and removes the need to edit profile config when adding skills
+- Slash command autocomplete in the web UI now filters by the active session's agent profile, so only relevant skills appear
+
+### Fixed
+- CLI startup crash: `ui: nil` keyword argument now correctly passed to `Agent.new`
+
+## [0.8.1] - 2026-03-09
+
+### Added
+- **Agent profile system**: define named agent profiles (`--agent coding|general`) with custom system prompts and skill whitelists via `profile.yml`; built-in `coding` and `general` profiles included
+- **Skill autocomplete dropdown** in the web UI: type `/` in the chat input to see a filtered list of available skills
+- **File-based logger** (`Clacky::Logger`): thread-safe structured logging to `~/.clacky/logs/` for debugging agent sessions
+- **Session persistence on startup**: server now restores the most recent session for the working directory automatically on boot
+- **Long-term memory update system**: agent automatically updates `~/.clacky/memories/` after sessions using a whitelist-driven approach; memories persist across restarts and are injected into agent context on startup
+- **recall-memory skill with smart meta injection**: the `recall-memory` skill now receives a pre-built index of all memory files (topic, description, last updated) so the agent can selectively load only relevant memories without reading every file
+- **Compressed message archiving**: older messages are compressed and archived to chunk Markdown files to keep context window manageable
+- **Network pre-flight check**: connection is verified before agent starts; helpful VPN/proxy suggestions shown on failure
+- **Encrypted brand skills**: white-label brand skills can now be shipped as encrypted `.enc` files for privacy
+
+### Improved
+- Memory update logic tightened: whitelist-driven approach, raised trigger threshold, and dynamic prompt — reduces false writes and improves reliability
+- Slash commands in onboarding (`/create-task`, `/skill-add`) now use the pending-message pattern so they work correctly before WS connects
+- Sidebar shows "No sessions yet" placeholder during onboarding
+- Session delete is now optimistic — UI updates immediately without waiting for WS broadcast, and 404 ghost sessions are cleaned up automatically
+- Tool call summaries from `format_call` are now rendered in the web UI for cleaner tool output display
+- Agent error handling and memory update flow stabilized
+
+### Fixed
+- Create Task / Create Skill buttons during onboarding now correctly send the command after WS connects (previously messages were silently dropped)
+- Pending slash commands are now queued until the session WS subscription is confirmed
+- `working_dir: nil` added to all tool `execute` signatures to fix unknown keyword errors
+
+### More
+- `clacky` install script robustness and UX improvements
+- Disabled rdoc/ri generation on gem install for faster installs
+- Strip `.git/.svn/.hg` directories from glob results
+
+## [0.8.0] - 2026-03-06
+
+### Added
+- **Browser tool**: AI agent can now control the user's Chrome browser via Chrome DevTools Protocol (CDP) — click, fill forms, take screenshots, scroll, and interact with pages using the user's real login session
+- White-label brand licensing system: customize the web UI with your own name, logo, colors, and skills via `brand_config.yml`
+- Brand skills tab in the web UI with private badge, shown only when brand skills are configured
+- Slash command prompt rule: skill invocations (e.g. `/skill-name`) are now expanded inside the agent at run time, enabling mid-session skill triggering
+
+### Improved
+- Server-side brand name rendering eliminates the first-paint brand name flash in the web UI
+- Collapsible tool call blocks in the web UI — long tool outputs are now grouped and collapsed by default
+- `safe_shell` now catches `ArgumentError` in addition to `BadQuotedString` for more robust command parsing
+- Eliminated `Dir.chdir` global state in session handling, fixing race conditions in concurrent sessions
+
+### Fixed
+- Skill slash commands are now expanded inside `agent.run` so that `/onboard` and similar commands work correctly when triggered mid-session
+- Observer state machine handles `awaiting` state transitions properly
+
+### More
+- Disabled ClaudeCode `ANTHROPIC_API_KEY` environment variable fallback in `AgentConfig` for cleaner env isolation
+- Updated gemspec, lockfile, and install script
+- Added web asset syntax specs and brand config specs
+
+## [0.7.9] - 2026-03-07
+
+### Added
+- Cursor-paginated message history in web UI for large session navigation
+- `confirm_all` permission mode for WebUI human sessions
+- Re-run onboard entry in settings panel
+
+### Fixed
+- Expand `~` in file system tools path arguments (file_reader, glob, grep, write, edit)
+- Sort sessions newest-first with scheduled sessions at bottom
+- Tasks and skills sidebar items now static — no longer disappear on scroll
+- Delete task now also removes associated schedules
+
+### More
+- Add frontmatter (`name`, `description`, `disable-model-invocation`, `user-invocable`) to onboard skill
+
+## [0.7.8] - 2026-03-06
+
+### Added
+- Skills panel in web UI: list all skills, enable/disable with toggle, view skill details
+- Hash-based routing (`#session/:id`, `#tasks`, `#skills`, `#settings`) with deep-link and refresh support
+- REST API endpoints for skills management (`GET /api/skills`, `PATCH /api/skills/:name/toggle`)
+- `disabled?` helper on `Skill` model for quick enabled/disabled state checks
+
+### Improved
+- Centralized `Router` object in web UI — single source of truth for all panel switching and sidebar highlight state
+- Web UI frontend split further: `skills.js` extracted as standalone module
+- Ctrl-C in web server now exits immediately via `StartCallback` trap override
+- Skill enable/disable now writes `disable-model-invocation: false` (retains field) instead of deleting it
+
+### Fixed
+- Sidebar highlight for Tasks and Skills stuck active after navigating away
+- Router correctly restores last view on page refresh via hash URL
+
+### Changed
+- Removed `plan_only` permission mode from agent, CLI, and web UI
+
+## [0.7.7] - 2026-03-04
+
+### Added
+- Web UI server with WebSocket support for real-time agent interaction in the browser (`clacky serve`)
+- Task scheduler with cron-based automation, REST API, and scheduled task execution
+- Settings panel in web UI for viewing and editing AI model configurations (API keys, base URL, provider presets)
+- Image upload support in web UI with attach button for multimodal prompts
+- Create Task button in the task list panel for quick task creation from the web UI
+- `create-task` default skill for guided automated task creation
+
+### Improved
+- Web UI frontend split into modular files (`ws.js`, `sessions.js`, `tasks.js`, `settings.js`) for maintainability
+- Web session agents now run in `auto_approve` mode for unattended execution
+- Session management moved to client-side for faster, round-trip-free navigation
+- User message rendering moved to the UI layer for cleaner architecture
+- No-cache headers for static file serving to ensure fresh asset delivery
+
+### Fixed
+- `DELETE`/`PUT`/`PATCH` HTTP methods now supported via custom WEBrick servlet
+- Task run broadcasts correctly after WebSocket subscription; table button visibility fixed
+- Mutex deadlock in scheduler `stop` method when called from a signal trap context
+- `split` used instead of `shellsplit` for skill arguments to avoid parsing errors
+
+### More
+- Add HTTP server spec and scheduler spec with full test coverage
+- Minor web UI style improvements and reduced mouse dependency
+
+## [0.7.6] - 2026-03-02
+
+### Added
+- Non-interactive `--message`/`-m` CLI mode for scripting and automation (run a single prompt and exit)
+- Real-time refresh and thread-safety improvements to fullscreen UI mode
+
+### Improved
+- Extract string matching logic into `Utils::StringMatcher` for cleaner, reusable edit diffing
+- Glob tool now uses force mode in system prompt for more reliable file discovery
+- VCS directories (`.git`, `.svn`, etc.) defined as `ALWAYS_IGNORED_DIRS` constant
+
+### Fixed
+- Subagent fork now injects assistant acknowledgment to fix conversation structure issues
+- Tool-denial message clarified; added `action_performed` flag for better control flow
+
+### More
+- Add memory architecture documentation
+- Minor whitespace cleanup in `agent_config.rb`
+
+## [0.7.5] - 2026-02-28
+
+### Fixed
+- Tool errors now display in low-key style (same as tool result) to avoid alarming users for non-critical errors the agent can retry
+- Session list now shows last message instead of first message for better context
+- Shell tool uses login shell (`-l`) instead of interactive shell (`-i`) for proper environment variable loading
+
+### Improved
+- Shell tool now reliably loads user environment (PATH, rbenv, nvm, etc.) on every execution
+- Session list shows resume tip (`clacky -a <session_id>`) to help users continue previous sessions
+
+### More
+- Add GitHub Release creation step to gem-release skill
+- Remove debug logging from API client
+
+## [0.7.4] - 2026-02-27
+
+### Added
+- Real-time command output viewing with Ctrl+O hotkey
+- GitHub skill installation support in skill-add
+- Rails project creation scripts in new skill
+- Auto-create ~/clacky_workspace when starting from home directory
+
+### Improved
+- System prompt with glob tool usage guidance
+- Commit skill with holistic grouping strategy and purpose-driven commits
+- Theme color support for light backgrounds (bright mode refinements)
+- Shell output handling and preview functionality
+- Message compressor optimization (reduced to 200)
+
+### Fixed
+- UI2 output re-rendering on modal close and height changes
+- Double render issue in inline input cleanup
+- Small terminal width handling for logo display
+- Extra newline in question display
+
+### More
+- Commented out idle timer debug logs for cleaner output
+
+## [0.7.3] - 2026-02-26
+
+### Fixed
+- Modal component validation result handling after form submission
+- Modal height calculation for dynamic field count in form mode
+
+### Improved
+- Provider ordering prioritizes well-tested providers (OpenRouter, Minimax) first
+- Updated Minimax to use new base URL (api.minimaxi.com) and M2.5 as default
+- Updated model versions: Claude Sonnet 4.6, OpenRouter Sonnet 4-6, Haiku 4.5
+- Minimax model list now includes M2.1 and M2.5 (removed deprecated Text-01)
+
+## [0.7.2] - 2026-02-26
+
+### Added
+- Cross-platform auto-install script with mise and WSL support
+- Built-in provider presets for quick model configuration
+- Terminal restart reminder after installation
+- More bin commands for improved CLI experience
+- Shields.io badges to README
+
+### Improved
+- Install script robustness and user experience
+- Code-explorer workflow with forked subagent mode explanation
+- README with features, usage scenarios, and comparison table
+- Installation section with clearer instructions
+
+### Fixed
+- Binary file detection using magic bytes only (prevents false positives on multibyte text)
+- Display user input before executing callback in handle_submit
+- Install script now uses gem-only approach (removed homebrew dependency)
+
+### More
+- Minor formatting fixes in install script and README
+- Removed skill emoji for cleaner UI
+- Removed test-skill
+- Updated install script configuration
+
+## [0.7.1] - 2026-02-24
+
+This release brings significant user experience improvements, new interaction modes, and enhanced agent capabilities.
+
+### 🎯 Major Features
+
+**Subagent System**
+- Deploy subagent for parallel task execution
+- Subagent mode with invoke_skill tool and code-explorer skill integration
+- Environment variable support and model type system
+
+**Command Experience**
+- Tab completion for slash commands
+- Ctrl+O toggle expand in diff view
+- JSON mode for structured output
+- Streamlined command selection workflow with improved filtering
+
+**Agent Improvements**
+- Idle compression with auto-trigger (180s timer)
+- Improved interrupt handling for tool execution
+- Preview display for edit and write tools in auto-approve mode
+- Enable preview display in auto-approve mode
+
+**Configuration UI**
+- Auto-save to config modal
+- Improved model management UI
+- Better error handling and validation
+
+### Added
+- Quick start guides in English and Chinese
+- Config example and tests for AgentConfig
+
+### Improved
+- Refactored agent architecture (split agent.rb, moved file locations)
+- Simplified thread management in chat command
+- Dynamic width ratio instead of fixed MAX_CONTENT_WIDTH
+- API error messages with HTML detection and truncation
+- Help command handling
+
+### Changed
+- Removed deprecated Config class (replaced by AgentConfig)
+- Removed confirm_edits permission mode
+- Removed keep_recent_messages configuration
+- Removed default model value
+
+### Fixed
+- Use ToolCallError instead of generic Error in tool registry
+- Handle AgentInterrupted exception during idle compression
+- Handle XML tag contamination in JSON tool parameters
+- Prevent modal flickering on validation failure
+- Update agent client when switching models to prevent stale config
+- Update is_safe_operation to not use removed editing_tool? method
+
+### More
+- Optimize markdown horizontal rule rendering
+- Add debug logging throughout codebase
+
+## [0.7.0] - 2026-02-06
+
+This is a major release with significant improvements to skill system, conversation memory management, and user experience.
+
+### 🎯 Major Features
+
+**Skill System**
+- Complete skill framework allowing users to extend AI capabilities with custom workflows
+- Skills can be invoked using shorthand syntax (e.g., `/commit`, `/gem-release`)
+- Support for user-created skills in `.clacky/skills/` directory
+- Built-in skills: commit (smart Git helper), gem-release (automated publishing)
+
+**Memory Compression**
+- Intelligent message compression to handle long conversations efficiently
+- LLM-based compression strategy that preserves context while reducing tokens
+- Automatic compression triggered based on message count and token usage
+- Significant reduction in API costs for extended sessions
+
+**Configuration Improvements**
+- API key validation on startup with helpful prompts
+- Interactive configuration UI with modal components
+- Source tracking for configuration (file, environment, defaults)
+- Better error messages and user guidance
+
+### Added
+- Request user feedback tool for interactive prompts during execution
+- Version display in welcome banner
+- File size limits for file_reader tool to prevent performance issues
+- Debug logging throughout the codebase
+
+### Improved
+- CLI output formatting and readability
+- Error handling with comprehensive debug information
+- Test coverage with 367 passing tests
+- Tool call output optimization for cleaner logs
+
+### Changed
+- Simplified CLI architecture by removing unused code
+- Enhanced modal component with new configuration features
+
+### Fixed
+- Message compression edge cases
+- Various test spec improvements
+
+## [0.6.4] - 2026-02-03
+
+### Added
+- Anthropic API support with full Claude model integration
+- ClaudeCode environment compatibility (ANTHROPIC_API_KEY support)
+- Model configuration with Anthropic defaults (claude-3-5-sonnet-20241022)
+- Enhanced error handling with AgentError and ToolCallError classes
+- format_tool_results for tool result formatting in agent execution
+- Comprehensive test suite for Anthropic API and configuration
+- Absolute path handling in glob tool
+
+### Improved
+- API client architecture for multi-provider support (OpenAI + Anthropic)
+- Config loading with source tracking (file, ClaudeCode, default)
+- Agent execution loop with improved tool result handling
+- Edit tool with improved pattern matching
+- User tip display in terminal
+
+### Changed
+- Refactored Error class to AgentError base class
+- Renamed connection methods for clarity (connection → openai_connection)
+
+### Fixed
+- Handle absolute paths correctly in glob tool
+
+## [0.6.3] - 2026-02-01
+
+### Added
+- Complete skill system with loader and core functionality
+- Default skill support with auto-loading mechanism
+- Skills CLI command for skill management (`clacky skills list/show/create`)
+- Command suggestions UI component for better user guidance
+- Skip safety check option for safe_shell tool
+- UI2 component comprehensive test suite
+- Token output control for file_reader and shell tools
+- Grep max files limit configuration
+- File_reader tool index support
+- Web fetch content length limiting
+
+### Improved
+- File_reader line range handling logic
+- Message compression strategy (100 message compress)
+- Inline input wrap line handling
+- Cursor position calculation for multi-line inline input
+- Theme adjustments for better visual experience
+- Skill system integration with agent
+- Gem-release skill metadata standardization
+- Skill documentation with user experience summaries
+
+### Fixed
+- Skill commands now properly pass through to agent
+- Session restore data loading with -a or -c flags
+- Inline input cursor positioning for wrapped lines
+- Multi-line inline input cursor calculation
+
+## [0.6.2] - 2026-01-30
+
+### Added
+- `--theme` CLI option to switch UI themes (hacker, minimal)
+- Support for reading binary files (with 5MB limit)
+- Cost color coding for better visibility
+- Install script for easier installation
+- New command handling improvements
+
+### Improved
+- User input style enhancements
+- Tool execution output simplification
+- Thinking mode output improvements
+- Diff format display with cleaner line numbers
+- Terminal resize handling
+
+### Fixed
+- BadQuotedString parsing error
+- Token counting for every new task
+- Shell output max characters limit
+- Inline input cursor positioning
+- Compress message display (now hidden)
+
+### Removed
+- Redundant output components for cleaner architecture
+
+## [0.6.1] - 2026-01-29
+
+### Added
+- User tips for better guidance and feedback
+- Batch TODO operations for improved task management
+- Markdown output support for better formatted responses
+- Text style customization options
+
+### Improved
+- Tool execution with slow progress indicators for long-running operations
+- Progress UI refinements for better visual feedback
+- Session restore now shows recent messages for context
+- TODO area UI enhancements with auto-hide when all tasks completed
+- Work status bar styling improvements
+- Text wrapping when moving input to output area
+- Safe shell output improvements for better readability
+- Task info display optimization (only show essential information)
+- TODO list cleanup and organization
+
+### Fixed
+- Double paste bug causing duplicate input
+- Double error message display issue
+- TODO clear functionality
+- RSpec test hanging issues
+
+### Removed
+- Tool emoji from output for cleaner display
+
+## [0.6.0] - 2026-01-28
+
+### Added
+- **New UI System (UI2)**: Complete component-based UI rewrite with modular architecture (InputArea, OutputArea, TodoArea, ToolComponent, ScreenBuffer, LayoutManager)
+- **Slash Commands**: `/help`, `/clear`, `/exit` for quick actions
+- **Prompt Caching**: Significantly improved performance and reduced API costs
+- **Theme System**: Support for multiple UI themes (base, hacker, minimal)
+- **Session Management**: Auto-keep last 10 sessions with datetime naming
+
+### Improved
+- Advanced inline input with Unicode support, multi-line handling, smooth scrolling, and rapid paste detection
+- Better terminal resize handling and flicker-free rendering
+- Work/idle status indicators with token cost display
+- Enhanced tool execution feedback and multiple tool rejection handling
+- Tool improvements: glob limits, grep performance, safe shell security, UTF-8 encoding fixes
+
+### Fixed
+- Input flickering, output scrolling, Ctrl+C behavior, image copying, base64 warnings, prompt cache issues
+
+### Removed
+- Legacy UI components (Banner, EnhancedPrompt, Formatter, StatusBar)
+- Max cost/iteration limits for better flexibility
+
+## [0.5.6] - 2026-01-18
+
+### Added
+- **Image Support**: Added support for image handling with cost tracking and display
+- **Enhanced Input Controls**: Added Emacs-like Ctrl+A/E navigation for input fields
+- **Session Management**: Added `/clear` command to clear session history
+- **Edit Mode Switching**: New feature to switch between different edit modes
+- **File Operations**: Support for reading from home directory (`~/`) and current directory (`.`)
+- **Image Management**: Ctrl+D hotkey to delete images functionality
+
+### Improved
+- **Cost Tracking**: Display detailed cost information at every turn for better transparency
+- **Performance**: Test suite speed optimizations and performance improvements
+- **Token Efficiency**: Reduced token usage in grep operations for cost savings
+
+### Fixed
+- Fixed system Cmd+V copy functionality for multi-line text
+- Fixed input flickering issues during text editing
+- Removed unnecessary blank lines from image handling
+
+## [0.5.4] - 2026-01-16
+
+### Added
+- **Automatic Paste Detection**: Rapid input detection automatically identifies paste operations
+- **Word Wrap Display**: Long input lines automatically wrap with scroll indicators (up to 15 visible lines)
+- **Full-width Terminal Display**: Enhanced prompt box uses full terminal width for better visibility
+
+### Improved
+- **Smart Ctrl+C Handling**: First press clears content, second press (within 2s) exits
+- **UTF-8 Encoding**: Better handling of multi-byte characters in clipboard operations
+- **Cursor Positioning**: Improved cursor tracking in wrapped lines
+- **Multi-line Paste**: Better display for pasted content with placeholder support
+
+## [0.5.0] - 2026-01-11
+
+### Added
+- **Agent Mode**: Autonomous AI agent with tool execution capabilities
+- **Built-in Tools**:
+  - `safe_shell` - Safe shell command execution with security checks
+  - `file_reader` - Read file contents
+  - `write` - Create/overwrite files with diff preview
+  - `edit` - Precise file editing with string replacement
+  - `glob` - Find files using glob patterns
+  - `grep` - Search file contents with regex
+  - `web_search` - Search the web for information
+  - `web_fetch` - Fetch and parse web pages
+  - `todo_manager` - Task planning and tracking
+  - `run_project` - Project dev server management
+- **Session Management**: Save, resume, and list conversation sessions
+- **Permission Modes**:
+  - `auto_approve` - Automatically execute all tools
+  - `confirm_safes` - Auto-execute safe operations, confirm risky ones
+  - `confirm_edits` - Confirm file edits only
+  - `confirm_all` - Confirm every tool execution
+  - `plan_only` - Plan without executing
+- **Cost Control**: Track and limit API usage costs
+- **Message Compression**: Automatic conversation history compression
+- **Project Rules**: Support for `.clackyrules`, `.cursorrules`, and `CLAUDE.md`
+- **Interactive Confirmations**: Preview diffs and shell commands before execution
+- **Hook System**: Extensible event hooks for customization
+
+### Changed
+- Refactored architecture to support autonomous agent capabilities
+- Enhanced CLI with agent command and session management
+- Improved error handling and retry logic for network failures
+- Better progress indicators during API calls and compression
+
+### Fixed
+- API compatibility issues with different providers
+- Session restoration with error recovery
+- Tool execution feedback loop
+- Safe shell command validation
+- Edit tool string matching and preview
+
+## [0.1.0] - 2025-12-27
+
+### Added
+- Initial release of Clacky
+- Interactive chat mode for conversations with Claude
+- Single message mode for quick queries
+- Configuration management for API keys
+- Support for Claude 3.5 Sonnet model
+- Colorful terminal output with TTY components
+- Secure API key storage in `~/.clacky/config.yml`
+- Multi-turn conversation support with context preservation
+- Command-line interface powered by Thor
+- Comprehensive test suite with RSpec
+
+### Features
+- `clacky chat [MESSAGE]` - Start interactive chat or send single message
+- `clacky config set` - Configure API key
+- `clacky config show` - Display current configuration
+- `clacky version` - Show version information
+- Model selection via `--model` option
+
+[Unreleased]: https://github.com/yafeilee/clacky/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/yafeilee/clacky/compare/v0.1.0...v0.5.0
+[0.1.0]: https://github.com/yafeilee/clacky/releases/tag/v0.1.0

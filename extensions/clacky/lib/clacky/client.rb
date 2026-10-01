@@ -1,0 +1,965 @@
+# frozen_string_literal: true
+
+require "faraday"
+require "json"
+
+module Clacky
+  class Client
+    MAX_RETRIES = 10
+    RETRY_DELAY = 5 # seconds
+
+    attr_reader :provider_id
+
+    # @param provider_id [String, nil] explicit provider preset id from the
+    #   model card. When it names a known preset it wins over base_url/api_key
+    #   heuristics, so a custom base_url still inherits the preset's capability
+    #   table (e.g. vision support). nil falls back to base_url inference.
+    # @param capabilities [Hash, nil] explicit capability declarations from the
+    #   model card (e.g. { "vision" => false }). These win over both provider_id
+    #   and base_url inference, so a custom gateway can declare "text-only"
+    #   without matching any preset.
+    def initialize(api_key, base_url:, model:, anthropic_format: false, api_format: nil, read_timeout: nil, provider_id: nil, capabilities: nil)
+      @api_key = api_key
+      @base_url = base_url
+      @model = model
+      @capabilities = capabilities.is_a?(Hash) ? capabilities : nil
+      # Detect Bedrock: ABSK key prefix (native AWS) or abs- model prefix (Clacky AI proxy)
+      @use_bedrock = MessageFormat::Bedrock.bedrock_api_key?(api_key, model)
+
+      # Resolve provider once — reused for capability + api-type lookups.
+      # An explicit provider_id naming a known preset wins over base_url
+      # inference (mirrors AgentConfig#provider_id_for); unknown/blank values
+      # fall through to the historical base_url/api_key heuristics.
+      provider_id = Providers.preset?(provider_id) ? provider_id : Providers.resolve_provider(base_url: @base_url, api_key: @api_key)
+
+      # Decide the transport format: an explicit user-selected api_format wins
+      # over provider preset resolution; the legacy anthropic_format boolean is
+      # mapped to an explicit "anthropic-messages" when true and to auto (nil)
+      # when false — identical to the previous behavior, but now a user can
+      # also force "openai-completions" on presets that default to anthropic.
+      # Auto (nil) resolves via provider presets, which lets e.g. OpenRouter's
+      # Claude models route to the native /v1/messages endpoint (preserving
+      # cache_control byte-for-byte) without any change to user YAML.
+      effective_api_format = api_format
+      effective_api_format ||= "anthropic-messages" if anthropic_format
+      resolved_type = Providers.api_type_for_model(provider_id, @model, user_override: effective_api_format)
+      @use_anthropic_format = resolved_type == "anthropic-messages"
+      @use_responses_format = resolved_type == "openai-responses"
+
+      # Remember the provider id so we can tune connection headers below
+      # (OpenRouter's /v1/messages accepts either Bearer or x-api-key, but
+      # some OpenRouter-compatible relays only honour Bearer — send both).
+      @provider_id = provider_id
+
+      # Optional override for Faraday read_timeout (e.g. benchmark calls).
+      # nil means use the default (300s for streaming).
+      @read_timeout = read_timeout
+    end
+
+    # Returns true when the client is using the AWS Bedrock Converse API.
+    def bedrock?
+      @use_bedrock
+    end
+
+    # Returns true when the client is talking directly to the Anthropic API
+    # (determined at construction time via the anthropic_format flag).
+    def anthropic_format?(model = nil)
+      @use_anthropic_format && !@use_bedrock
+    end
+
+    # Returns true when the client talks to the OpenAI Responses API
+    # (/v1/responses) instead of Chat Completions.
+    def responses_format?(model = nil)
+      @use_responses_format && !@use_bedrock
+    end
+
+    # ── Connection test ───────────────────────────────────────────────────────
+
+    # Test API connection by sending a minimal request.
+    # Returns { success: true } or { success: false, error: "..." }.
+    def test_connection(model:)
+      api_model = Providers.resolve_api_model(base_url: @base_url, api_key: @api_key, model: model)
+      if bedrock?
+        body = MessageFormat::Bedrock.build_request_body(
+          [{ role: :user, content: "hi" }], api_model, [], 16
+        ).to_json
+        response = bedrock_connection.post(bedrock_endpoint(api_model)) { |r| r.body = body }
+      elsif anthropic_format?
+        minimal_body = { model: api_model, max_tokens: 16,
+                         messages: [{ role: "user", content: "hi" }] }.to_json
+        response = anthropic_connection.post(anthropic_messages_path) { |r| r.body = minimal_body }
+      elsif responses_format?
+        minimal_body = MessageFormat::OpenAIResponses.build_request_body(
+          [{ role: "user", content: "hi" }], api_model, [], 16, false
+        ).to_json
+        response = openai_connection.post("responses") { |r| r.body = minimal_body }
+      else
+        minimal_body = { model: api_model, max_tokens: 16,
+                         messages: [{ role: "user", content: "hi" }] }.to_json
+        response = openai_connection.post("chat/completions") { |r| r.body = minimal_body }
+      end
+      handle_test_response(response)
+    rescue Faraday::Error => e
+      { success: false, error: "Connection error: #{e.message}" }
+    rescue => e
+      Clacky::Logger.error("[test_connection] #{e.class}: #{e.message}", error: e)
+      { success: false, error: e.message }
+    end
+
+    # ── Simple (non-agent) helpers ────────────────────────────────────────────
+
+    # Send a single string message and return the reply text.
+    def send_message(content, model:, max_tokens:)
+      messages = [{ role: "user", content: content }]
+      send_messages(messages, model: model, max_tokens: max_tokens)
+    end
+
+    # Send a messages array and return the reply text.
+    def send_messages(messages, model:, max_tokens:, reasoning_effort: nil)
+      api_model = Providers.resolve_api_model(base_url: @base_url, api_key: @api_key, model: model)
+      if bedrock?
+        body     = MessageFormat::Bedrock.build_request_body(messages, api_model, [], max_tokens)
+        response = bedrock_connection.post(bedrock_endpoint(api_model)) { |r| r.body = body.to_json }
+        parse_simple_bedrock_response(response)
+      elsif anthropic_format?
+        body     = MessageFormat::Anthropic.build_request_body(messages, api_model, [], max_tokens, false)
+        response = anthropic_connection.post(anthropic_messages_path) { |r| r.body = body.to_json }
+        parse_simple_anthropic_response(response)
+      elsif responses_format?
+        body     = MessageFormat::OpenAIResponses.build_request_body(messages, api_model, [], max_tokens, false)
+        response = openai_connection.post("responses") { |r| r.body = body.to_json }
+        parse_simple_openai_responses_response(response)
+      else
+        body     = MessageFormat::OpenAI.build_request_body(messages, api_model, [], max_tokens, false, reasoning_effort: reasoning_effort)
+        response = openai_connection.post("chat/completions") { |r| r.body = body.to_json }
+        parse_simple_openai_response(response)
+      end
+    end
+
+    # ── Agent main path ───────────────────────────────────────────────────────
+
+    # Send messages with tool-calling support.
+    # Returns canonical response hash: { content:, tool_calls:, finish_reason:, usage:, latency: }
+    #
+    # Latency measurement:
+    #   Because the current HTTP path is *non-streaming* (plain POST, response
+    #   body read in one shot), TTFB (time to response headers) is not exposed
+    #   by Faraday's default adapter without extra plumbing. What we CAN measure
+    #   cheaply — and what users actually feel — is total request duration,
+    #   which for a non-streaming call equals the time from "hit Enter" to
+    #   "first token visible" (since we receive everything at once).
+    #
+    #   So we record `duration_ms` as the authoritative number and alias it to
+    #   `ttft_ms` for downstream consumers (status bar uses ttft_ms as its
+    #   signal metric — see docs). When we migrate to streaming later, this
+    #   same `ttft_ms` field will start carrying the *actual* first-token
+    #   latency without any schema change.
+    # @param on_chunk [Proc, nil] optional streaming progress callback.
+    #   Receives keyword args { input_tokens:, output_tokens: } with cumulative
+    #   token counts. When nil, behaves exactly as the historical non-streaming
+    #   path. When given but streaming is not yet wired for the active provider,
+    #   a single synthetic invocation is fired after the response is received,
+    #   so UI plumbing can be exercised end-to-end without the proxy work.
+    def send_messages_with_tools(messages, model:, tools:, max_tokens:, enable_caching: false, reasoning_effort: nil, on_chunk: nil, agent_upstream_fails: nil, agent_upgrade_fails: nil)
+      api_model = Providers.resolve_api_model(base_url: @base_url, api_key: @api_key, model: model)
+      caching_enabled = enable_caching && supports_prompt_caching?(model)
+      cloned = deep_clone(messages)
+
+      streaming_used = false
+      first_chunk_at = nil
+      wrapped_on_chunk = on_chunk && lambda do |**kwargs|
+        first_chunk_at ||= Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        on_chunk.call(**kwargs)
+      end
+
+      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      response =
+        if bedrock?
+          streaming_used = !on_chunk.nil?
+          send_bedrock_request(cloned, api_model, tools, max_tokens, caching_enabled, reasoning_effort: reasoning_effort, on_chunk: wrapped_on_chunk)
+        elsif anthropic_format?
+          streaming_used = !on_chunk.nil?
+          send_anthropic_request(cloned, api_model, tools, max_tokens, caching_enabled, reasoning_effort: reasoning_effort, on_chunk: wrapped_on_chunk)
+        elsif responses_format?
+          streaming_used = !on_chunk.nil?
+          send_openai_responses_request(cloned, api_model, tools, max_tokens, caching_enabled, reasoning_effort: reasoning_effort, on_chunk: wrapped_on_chunk, capability_model: model)
+        else
+          streaming_used = !on_chunk.nil?
+          send_openai_request(cloned, api_model, tools, max_tokens, caching_enabled, reasoning_effort: reasoning_effort, on_chunk: wrapped_on_chunk, capability_model: model, agent_upstream_fails: agent_upstream_fails, agent_upgrade_fails: agent_upgrade_fails)
+        end
+      t1 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+      if on_chunk && !streaming_used
+        usage = response[:usage] || {}
+        safe_invoke_on_chunk(
+          on_chunk,
+          input_tokens:  usage[:prompt_tokens].to_i,
+          output_tokens: usage[:completion_tokens].to_i
+        )
+      end
+
+      duration_ms = ((t1 - t0) * 1000).round
+      ttft_ms = first_chunk_at ? ((first_chunk_at - t0) * 1000).round : duration_ms
+      output_tokens = response[:usage]&.dig(:completion_tokens).to_i
+      tps = (output_tokens >= 10 && duration_ms > 0) ? (output_tokens * 1000.0 / duration_ms).round(1) : nil
+
+      response[:latency] = {
+        ttft_ms:     ttft_ms,
+        duration_ms: duration_ms,
+        output_tokens: output_tokens,
+        tps:         tps,
+        model:       response[:routed_model] || model,
+        measured_at: Time.now.to_f,
+        streaming:   streaming_used
+      }
+      response
+    end
+
+    # Format tool results into canonical messages ready to append to @messages.
+    # Always returns canonical format (role: "tool") regardless of API type —
+    # conversion to API-native happens inside each send_*_request.
+    def format_tool_results(response, tool_results, model:)
+      return [] if tool_results.empty?
+
+      if bedrock?
+        MessageFormat::Bedrock.format_tool_results(response, tool_results)
+      elsif anthropic_format?
+        MessageFormat::Anthropic.format_tool_results(response, tool_results)
+      elsif responses_format?
+        MessageFormat::OpenAIResponses.format_tool_results(response, tool_results)
+      else
+        MessageFormat::OpenAI.format_tool_results(response, tool_results)
+      end
+    end
+
+    # ── Prompt-caching support ────────────────────────────────────────────────
+
+    # Returns true for Claude models that support prompt caching (gen 3.5+ or gen 4+).
+    #
+    # Handles both direct model names (e.g. "claude-haiku-4-5") and
+    # Clacky AI Bedrock proxy names with "abs-" prefix (e.g. "abs-claude-haiku-4-5").
+    #
+    # Why only Claude models:
+    #   - MiniMax uses automatic server-side caching (no cache_control needed from client)
+    #   - Kimi uses a proprietary prompt_cache_key param, not cache_control
+    #   - MiMo has no documented caching API
+    #   - Only Claude (direct, OpenRouter, or ClackyAI Bedrock proxy) consumes our
+    #     cache_control / cachePoint markers
+    def supports_prompt_caching?(model)
+      # Strip ClackyAI Bedrock proxy prefix before matching
+      model_str = model.to_s.downcase.sub(/^abs-/, "")
+      return false unless model_str.include?("claude")
+
+      # Match Claude gen 3.5+ (3.5/3.6/3.7…) or gen 4+ in any name format:
+      #   claude-3.5-sonnet-...  claude-3-7-sonnet  claude-haiku-4-5  claude-sonnet-4-6
+      model_str.match?(/claude(?:-3[-.]?[5-9]|.*-[4-9][-.]|.*-[4-9]$|-[4-9][-.]|-[4-9]$|-sonnet-[34])/)
+    end
+
+
+    # ── Bedrock Converse request / response ───────────────────────────────────
+
+    def send_bedrock_request(messages, model, tools, max_tokens, caching_enabled, reasoning_effort: nil, on_chunk: nil)
+      body = MessageFormat::Bedrock.build_request_body(messages, model, tools, max_tokens, caching_enabled, reasoning_effort: reasoning_effort)
+      return send_bedrock_stream_request(body, model, on_chunk) if on_chunk
+
+      response = bedrock_connection.post(bedrock_endpoint(model)) { |r| r.body = body.to_json }
+
+      raise_error(response) unless response.status == 200
+      check_html_response(response)
+      parsed_body = safe_json_parse(response.body, context: "LLM response")
+      MessageFormat::Bedrock.parse_response(parsed_body)
+    end
+
+    # Streaming variant for Bedrock Converse.
+    # Posts to /model/{m}/converse-stream with stream:true; the proxy returns
+    # SSE frames whose `event` is the Bedrock event-type and whose `data` is
+    # the raw Bedrock event JSON. We accumulate frames into a synthetic
+    # non-streaming response and feed it back through the existing parser so
+    # downstream code is identical.
+    private def send_bedrock_stream_request(body, model, on_chunk)
+      stream_body = body.merge(stream: true)
+      aggregator = BedrockStreamAggregator.new(on_chunk: on_chunk)
+      sse_buf = +""
+
+      response = bedrock_connection.post(bedrock_stream_endpoint(model)) do |req|
+        req.body = stream_body.to_json
+        req.options.on_data = proc do |chunk, _bytes_received, _env|
+          Clacky::Shutdown.checkpoint!
+          sse_buf << chunk
+          drain_sse_frames(sse_buf) { |event, data| aggregator.handle(event, data) }
+        end
+      end
+
+      unless response.status == 200
+        response.env.body = sse_buf if response.body.to_s.empty?
+        raise_error(response)
+      end
+
+      result = aggregator.to_h
+      log_stream_summary("bedrock", aggregator, result["stopReason"])
+      # A complete Converse stream always emits stopReason in its messageStop
+      # frame. Its absence means the upstream cut the stream mid-response,
+      # leaving a half-written message; retry rather than accept the truncation.
+      if result["stopReason"].nil?
+        raise Clacky::UpstreamTruncatedError,
+          "[LLM] Streaming response ended without stopReason (upstream cut the stream). Retrying..."
+      end
+      MessageFormat::Bedrock.parse_response(result)
+    end
+
+    def parse_simple_bedrock_response(response)
+      raise_error(response) unless response.status == 200
+      data = safe_json_parse(response.body, context: "LLM response")
+      (data.dig("output", "message", "content") || [])
+        .select { |b| b["text"] }
+        .map { |b| b["text"] }
+        .join("")
+    end
+
+    # ── Anthropic request / response ──────────────────────────────────────────
+
+    def send_anthropic_request(messages, model, tools, max_tokens, caching_enabled, reasoning_effort: nil, on_chunk: nil)
+      # Apply cache_control to the message that marks the cache breakpoint
+      messages = apply_message_caching(messages) if caching_enabled
+
+      body = MessageFormat::Anthropic.build_request_body(messages, model, tools, max_tokens, caching_enabled, reasoning_effort: reasoning_effort)
+      return send_anthropic_stream_request(body, on_chunk) if on_chunk
+
+      response = anthropic_connection.post(anthropic_messages_path) { |r| r.body = body.to_json }
+
+      raise_error(response) unless response.status == 200
+      check_html_response(response)
+      parsed_body = safe_json_parse(response.body, context: "LLM response")
+      MessageFormat::Anthropic.parse_response(parsed_body)
+    end
+
+    private def send_anthropic_stream_request(body, on_chunk)
+      stream_body = body.merge(stream: true)
+      aggregator = AnthropicStreamAggregator.new(on_chunk: on_chunk)
+      sse_buf = +""
+
+      response = anthropic_connection.post(anthropic_messages_path) do |req|
+        req.headers["Accept"] = "text/event-stream"
+        req.body = stream_body.to_json
+        req.options.on_data = proc do |chunk, _bytes_received, _env|
+          Clacky::Shutdown.checkpoint!
+          sse_buf << chunk
+          drain_sse_frames(sse_buf) { |event, data| aggregator.handle(event, data) }
+        end
+      end
+
+      unless response.status == 200
+        recovered_body = response.body.to_s
+        recovered_body = sse_buf.to_s if recovered_body.empty?
+        recovered = Struct.new(:status, :body).new(response.status, recovered_body)
+        raise_error(recovered)
+      end
+
+      result = aggregator.to_h
+      log_stream_summary("anthropic", aggregator, result["stop_reason"])
+      # A complete Messages stream always emits stop_reason in its message_delta
+      # frame. Its absence means the upstream cut the stream mid-response,
+      # leaving a half-written message; retry rather than accept the truncation.
+      if result["stop_reason"].nil?
+        raise Clacky::UpstreamTruncatedError,
+          "[LLM] Streaming response ended without stop_reason (upstream cut the stream). Retrying..."
+      end
+      MessageFormat::Anthropic.parse_response(result)
+    end
+
+    def parse_simple_anthropic_response(response)
+      raise_error(response) unless response.status == 200
+      data = safe_json_parse(response.body, context: "LLM response")
+      (data["content"] || []).select { |b| b["type"] == "text" }.map { |b| b["text"] }.join("")
+    end
+
+    # ── OpenAI request / response ─────────────────────────────────────────────
+
+    def send_openai_request(messages, model, tools, max_tokens, caching_enabled, reasoning_effort: nil, on_chunk: nil, capability_model: nil, agent_upstream_fails: nil, agent_upgrade_fails: nil)
+      # Override max_tokens when the model declares a higher output ceiling
+      # in Providers::MODEL_MAX_OUTPUT. Without this, strong models (GLM-5.2,
+      # Kimi-K3, MiMo-V2.5) are throttled to the 16K global default.
+      model_for_limit = capability_model || model
+      model_limit = Providers.max_output_for(model_for_limit)
+      max_tokens = model_limit if model_limit
+
+      # Apply cache_control markers to messages when caching is enabled.
+      # OpenRouter proxies Claude with the same cache_control field convention as Anthropic direct.
+      messages = apply_message_caching(messages) if caching_enabled
+
+      # Vision support is resolved against the display model name, which is the
+      # key our capability table is declared with. `model` may be an
+      # endpoint-specific API id (e.g. Ark payg's "glm-5-2-260617") that the
+      # table can't match — so the caller passes the display name separately
+      # via capability_model to keep the vision judgement accurate.
+      cap_model = capability_model || model
+      vision_supported = capability_supported?(:vision, cap_model)
+      body = MessageFormat::OpenAI.build_request_body(
+        messages, model, tools, max_tokens, caching_enabled,
+        vision_supported: vision_supported,
+        reasoning_effort: reasoning_effort
+      )
+      return send_openai_stream_request(body, on_chunk, agent_upstream_fails: agent_upstream_fails, agent_upgrade_fails: agent_upgrade_fails) if on_chunk
+
+      response = openai_connection.post("chat/completions") do |r|
+        r.body = body.to_json
+        set_agent_headers(r, agent_upstream_fails, agent_upgrade_fails)
+      end
+
+      raise_error(response) unless response.status == 200
+      check_html_response(response)
+
+      parsed_body = safe_json_parse(response.body, context: "LLM response")
+      parsed = MessageFormat::OpenAI.parse_response(parsed_body)
+      parsed[:routed_model] = response.headers["X-Clacky-Routed-Model"] if response.headers["X-Clacky-Routed-Model"]
+      parsed[:routed_tier] = response.headers["X-Clacky-Routed-Tier"] if response.headers["X-Clacky-Routed-Tier"]
+      parsed
+    end
+
+    # Forward the agent's pressure signals to the auto-routing gateway. The
+    # gateway is stateless, so the client is the only place that knows how a
+    # task is actually going (which lane already failed).
+    private def set_agent_headers(req, upstream_fails, upgrade_fails)
+      req.headers["X-Clacky-Agent-Upstream-Fails"] = upstream_fails.to_s if upstream_fails
+      req.headers["X-Clacky-Agent-Upgrade-Fails"] = upgrade_fails.to_s if upgrade_fails
+    end
+
+    # Whether the target model supports a capability. Resolution order mirrors
+    # AgentConfig#current_model_supports? so the client and agent agree:
+    #   1. explicit `capabilities` declared on the model card win
+    #      (e.g. { "vision" => false } on a custom text-only gateway)
+    #   2. provider preset capability table (via provider_id / base_url inference)
+    #   3. conservative default true (unknown provider assumed capable)
+    #
+    # @param capability [Symbol] capability name (e.g. :vision)
+    # @param cap_model [String, nil] display model name for preset lookups
+    # @return [Boolean]
+    private def capability_supported?(capability, cap_model)
+      if @capabilities
+        key = capability.to_s
+        return @capabilities[key] != false if @capabilities.key?(key)
+      end
+      Providers.supports?(@provider_id, capability, model_name: cap_model)
+    end
+
+    # Streaming variant for OpenAI-compatible chat completions (DeepSeek/OpenRouter
+    # via platform/llm_proxy). Uses Faraday's on_data hook to consume SSE frames,
+    # accumulates them, and reconstructs the non-streaming JSON response shape so
+    # MessageFormat::OpenAI.parse_response works unchanged.
+    private def send_openai_stream_request(body, on_chunk, agent_upstream_fails: nil, agent_upgrade_fails: nil)
+      stream_body = body.merge(stream: true, stream_options: { include_usage: true })
+      aggregator = OpenAIStreamAggregator.new(on_chunk: on_chunk)
+      sse_buf = +""
+
+      response = openai_connection.post("chat/completions") do |req|
+        req.body = stream_body.to_json
+        set_agent_headers(req, agent_upstream_fails, agent_upgrade_fails)
+        req.options.on_data = proc do |chunk, _bytes_received, _env|
+          Clacky::Shutdown.checkpoint!
+          sse_buf << chunk
+          drain_sse_frames(sse_buf) { |_event, data| aggregator.handle(data) }
+        end
+      end
+
+      unless response.status == 200
+        response.env.body = sse_buf if response.body.to_s.empty?
+        raise_error(response)
+      end
+
+      routed_tier = response.headers["X-Clacky-Routed-Tier"]
+      result = aggregator.to_h
+      log_stream_summary("openai", aggregator, result.dig("choices", 0, "finish_reason"))
+      # A complete chat-completion stream always terminates with a frame
+      # carrying finish_reason. Its absence means the upstream cut the stream
+      # mid-response (e.g. proxy idle-timeout, connection reset that Faraday
+      # didn't surface as an exception), leaving a half-written message. Treat
+      # as retryable so we don't hand a silently truncated answer to the agent.
+      if result.dig("choices", 0, "finish_reason").nil?
+        raise Clacky::UpstreamTruncatedError.new(
+          "[LLM] Streaming response ended without finish_reason (upstream cut the stream). Retrying...",
+          routed_tier: routed_tier
+        )
+      end
+      parsed = MessageFormat::OpenAI.parse_response(result)
+      parsed[:routed_model] = response.headers["X-Clacky-Routed-Model"] if response.headers["X-Clacky-Routed-Model"]
+      parsed[:routed_tier] = routed_tier if routed_tier
+      parsed
+    end
+
+    def parse_simple_openai_response(response)
+      raise_error(response) unless response.status == 200
+      parsed_body = safe_json_parse(response.body, context: "LLM response")
+      content = parsed_body.dig("choices", 0, "message", "content")
+      if content.nil?
+        snippet = response.body.to_s[0, 1200]
+        if defined?(Clacky::Logger)
+          Clacky::Logger.warn("[parse_simple_openai_response] no content. status=#{response.status} body=#{snippet}")
+        end
+        raise RetryableError,
+          "Upstream OpenAI-compatible response missing choices[0].message.content. " \
+          "Body snippet: #{snippet}"
+      end
+      content
+    end
+
+    # ── OpenAI Responses API request / response ───────────────────────────────
+
+    def send_openai_responses_request(messages, model, tools, max_tokens, caching_enabled,
+                                      reasoning_effort: nil, on_chunk: nil, capability_model: nil)
+      # Override max_tokens when the model declares a higher output ceiling
+      model_for_limit = capability_model || model
+      model_limit = Providers.max_output_for(model_for_limit)
+      max_tokens = model_limit if model_limit
+
+      # Deliberately no apply_message_caching here: the Responses API does
+      # not recognize Anthropic-style cache_control markers, and OpenAI's
+      # Responses prompt caching is automatic server-side. Injecting
+      # cache_control would be silently ignored (or rejected by stricter
+      # endpoints).
+
+      cap_model = capability_model || model
+      body = MessageFormat::OpenAIResponses.build_request_body(
+        messages, model, tools, max_tokens, caching_enabled,
+        vision_supported: Providers.supports?(@provider_id, :vision, model_name: cap_model),
+        reasoning_effort: reasoning_effort
+      )
+      return send_openai_responses_stream_request(body, on_chunk) if on_chunk
+
+      response = openai_connection.post("responses") { |r| r.body = body.to_json }
+
+      raise_error(response) unless response.status == 200
+      check_html_response(response)
+
+      parsed_body = safe_json_parse(response.body, context: "LLM response")
+      MessageFormat::OpenAIResponses.parse_response(parsed_body)
+    end
+
+    # Streaming variant for the OpenAI Responses API.
+    # Posts to the "responses" endpoint with stream:true; the upstream returns
+    # typed SSE events (response.output_text.delta,
+    # response.function_call_arguments.delta, response.completed, etc.) that
+    # the aggregator reassembles into the non-streaming response shape.
+    private def send_openai_responses_stream_request(body, on_chunk)
+      stream_body = body.merge(stream: true)
+      aggregator = OpenAIResponsesStreamAggregator.new(on_chunk: on_chunk)
+      sse_buf = +""
+
+      response = openai_connection.post("responses") do |req|
+        req.headers["Accept"] = "text/event-stream"
+        req.body = stream_body.to_json
+        req.options.on_data = proc do |chunk, _bytes_received, _env|
+          sse_buf << chunk
+          drain_sse_frames(sse_buf) { |_event, data| aggregator.handle(data) }
+        end
+      end
+
+      unless response.status == 200
+        response.env.body = sse_buf if response.body.to_s.empty?
+        raise_error(response)
+      end
+
+      result = aggregator.to_h
+      log_stream_summary("openai-responses", aggregator, aggregator.saw_done? ? "completed" : nil)
+      # A complete Responses API stream always terminates with a
+      # response.completed / response.done (or response.incomplete) event.
+      # Its absence means the upstream cut the stream mid-response; retry
+      # rather than accept a silently truncated answer.
+      unless aggregator.saw_done?
+        raise Clacky::UpstreamTruncatedError,
+          "[LLM] Streaming response ended without response.completed (upstream cut the stream). Retrying..."
+      end
+      MessageFormat::OpenAIResponses.parse_response(result)
+    end
+
+    def parse_simple_openai_responses_response(response)
+      raise_error(response) unless response.status == 200
+      parsed_body = safe_json_parse(response.body, context: "LLM response")
+      result = MessageFormat::OpenAIResponses.parse_response(parsed_body)
+      content = result[:content]
+      if content.nil?
+        snippet = response.body.to_s[0, 1200]
+        if defined?(Clacky::Logger)
+          Clacky::Logger.warn("[parse_simple_openai_responses_response] no content. status=#{response.status} body=#{snippet}")
+        end
+        raise RetryableError,
+          "Upstream Responses API response missing text content. " \
+          "Body snippet: #{snippet}"
+      end
+      content
+    end
+
+    # ── Prompt caching helpers ────────────────────────────────────────────────
+
+    # Add cache_control markers to the last 2 messages in the array.
+    #
+    # Why 2 markers:
+    #   Turn N   — marks messages[-2] and messages[-1]; server caches prefix up to [-1]
+    #   Turn N+1 — messages[-2] is Turn N's last message (still marked) → cache READ hit;
+    #              messages[-1] is the new message (marked) → cache WRITE for Turn N+2
+    #
+    # With only 1 marker (old behavior): Turn N marks messages[-1]; in Turn N+1 that same
+    # message is now [-2] and carries no marker → server sees a different prefix → cache MISS.
+    #
+    # Compression instructions (system_injected: true) are skipped — we never want to cache
+    # those ephemeral injection messages.
+    def apply_message_caching(messages)
+      return messages if messages.empty?
+
+      # Collect up to 2 candidate indices from the tail, skipping compression instructions.
+      candidate_indices = []
+      (messages.length - 1).downto(0) do |i|
+        break if candidate_indices.length >= 2
+
+        candidate_indices << i unless is_compression_instruction?(messages[i])
+      end
+
+      messages.map.with_index do |msg, idx|
+        candidate_indices.include?(idx) ? add_cache_control_to_message(msg) : msg
+      end
+    end
+
+    # Wrap or extend the message's content with a cache_control marker.
+    def add_cache_control_to_message(msg)
+      content = msg[:content]
+
+      content_array = case content
+                      when String
+                        [{ type: "text", text: content, cache_control: { type: "ephemeral" } }]
+                      when Array
+                        content.map.with_index do |block, idx|
+                          idx == content.length - 1 ? block.merge(cache_control: { type: "ephemeral" }) : block
+                        end
+                      else
+                        return msg
+                      end
+
+      msg.merge(content: content_array)
+    end
+
+    def is_compression_instruction?(message)
+      message.is_a?(Hash) && message[:system_injected] == true
+    end
+
+    # ── HTTP connections ──────────────────────────────────────────────────────
+
+    # Bedrock Converse API endpoint path for a given model ID.
+    def bedrock_endpoint(model)
+      "/model/#{model}/converse"
+    end
+
+    # Bedrock Converse streaming endpoint path.
+    private def bedrock_stream_endpoint(model)
+      "/model/#{model}/converse-stream"
+    end
+
+    # Emit a one-line summary of a streaming response when something looks
+    # off (parse failures, missing terminal frame). No-op on the happy path
+    # to keep logs quiet.
+    private def log_stream_summary(provider, aggregator, terminal_marker)
+      parse_failures = aggregator.respond_to?(:parse_failures) ? aggregator.parse_failures.to_i : 0
+      missing_terminal = terminal_marker.nil?
+      return if parse_failures.zero? && !missing_terminal
+
+      Clacky::Logger.warn("stream.summary",
+        provider: provider,
+        frames_seen: aggregator.respond_to?(:frames_seen) ? aggregator.frames_seen : nil,
+        bytes_seen: aggregator.respond_to?(:bytes_seen) ? aggregator.bytes_seen : nil,
+        parse_failures: parse_failures,
+        saw_done: aggregator.respond_to?(:saw_done?) ? aggregator.saw_done? : nil,
+        terminal_marker_present: !missing_terminal
+      )
+    end
+
+    # Pull complete SSE frames out of a buffer and yield them as (event, data).
+    # An SSE frame ends at a blank line ("\n\n"); incomplete trailing data
+    # stays in the buffer for the next chunk. Frames without an explicit
+    # `event:` line use the default "message" type per the SSE spec.
+    private def drain_sse_frames(buf)
+      while (sep = buf.index("\n\n"))
+        frame = buf.slice!(0, sep + 2)
+        event = "message"
+        data_lines = []
+        frame.each_line do |line|
+          line = line.chomp
+          if line.start_with?("event:")
+            event = line.sub(/^event:\s*/, "")
+          elsif line.start_with?("data:")
+            data_lines << line.sub(/^data:\s*/, "")
+          end
+        end
+        next if data_lines.empty?
+        yield event, data_lines.join("\n")
+      end
+    end
+
+    def reset_connections!
+      @bedrock_connection = nil
+      @openai_connection = nil
+      @anthropic_connection = nil
+    end
+
+    def bedrock_connection
+      current_epoch = Clacky::ProxyConfig.epoch
+      if @bedrock_connection.nil? ||
+         (!@bedrock_connection_epoch.nil? && @bedrock_connection_epoch != current_epoch)
+        @bedrock_connection = Faraday.new(url: @base_url) do |conn|
+          conn.headers["Content-Type"]  = "application/json"
+          conn.headers["Authorization"] = "Bearer #{@api_key}"
+          conn.options.timeout      = @read_timeout || 300
+          conn.options.open_timeout = 10
+          conn.ssl.verify           = false
+          conn.adapter Faraday.default_adapter
+        end
+        @bedrock_connection_epoch = current_epoch
+      end
+      @bedrock_connection
+    end
+
+    def openai_connection
+      current_epoch = Clacky::ProxyConfig.epoch
+      if @openai_connection.nil? ||
+         (!@openai_connection_epoch.nil? && @openai_connection_epoch != current_epoch)
+        @openai_connection = Faraday.new(url: @base_url) do |conn|
+          conn.headers["Content-Type"]  = "application/json"
+          conn.headers["Authorization"] = "Bearer #{@api_key}"
+          conn.options.timeout      = @read_timeout || 300
+          conn.options.open_timeout = 10
+          conn.ssl.verify           = false
+          conn.adapter Faraday.default_adapter
+        end
+        @openai_connection_epoch = current_epoch
+      end
+      @openai_connection
+    end
+
+    def anthropic_connection
+      current_epoch = Clacky::ProxyConfig.epoch
+      if @anthropic_connection.nil? ||
+         (!@anthropic_connection_epoch.nil? && @anthropic_connection_epoch != current_epoch)
+        @anthropic_connection = Faraday.new(url: @base_url) do |conn|
+          conn.headers["Content-Type"]   = "application/json"
+          conn.headers["x-api-key"]      = @api_key
+          conn.headers["anthropic-version"] = "2023-06-01"
+          conn.headers["anthropic-dangerous-direct-browser-access"] = "true"
+          if @provider_id == Clacky::Providers::OPENROUTER_ID
+            conn.headers["Authorization"] = "Bearer #{@api_key}"
+          end
+          # Moonshot's Kimi Code (Coding Plan) endpoint enforces a User-Agent
+          # prefix whitelist limited to first-party coding agents.
+          if @provider_id == Clacky::Providers::KIMI_CODING_ID
+            conn.headers["User-Agent"] = "claude-cli/1.0.51 (external, cli)"
+          end
+          conn.options.timeout      = @read_timeout || 300
+          conn.options.open_timeout = 10
+          conn.ssl.verify           = false
+          conn.adapter Faraday.default_adapter
+        end
+        @anthropic_connection_epoch = current_epoch
+      end
+      @anthropic_connection
+    end
+
+    # Correct relative path for the Anthropic /v1/messages endpoint, accounting
+    # for whether the configured base_url already includes a "/v1" segment.
+    #
+    # Examples:
+    #   base_url = "https://api.anthropic.com"         → "v1/messages"
+    #   base_url = "https://openrouter.ai/api/v1"      → "messages"
+    #   base_url = "https://openrouter.ai/api/v1/"     → "messages"
+    #
+    # Without this, OpenRouter would receive POST /api/v1/v1/messages → 404
+    # (HTML error page), which bubbles up as the infamous
+    # "Invalid API endpoint or server error (received HTML instead of JSON)".
+    private def anthropic_messages_path
+      base = @base_url.to_s.chomp("/")
+      base.end_with?("/v1") ? "messages" : "v1/messages"
+    end
+
+    # ── Error handling ────────────────────────────────────────────────────────
+
+    def handle_test_response(response)
+      return { success: true, status: response.status } if response.status == 200
+
+      error_body = JSON.parse(response.body) rescue nil
+      error_code = extract_error_code(error_body)
+
+      translated = case response.status
+      when 402       then I18n.t("llm.error.insufficient_credit")
+      when 400       then I18n.t("llm.error.rate_limit_400")
+      when 401       then I18n.t("llm.error.invalid_api_key")
+      when 403       then I18n.t("llm.error.403.#{error_code || "default"}")
+      when 404       then I18n.t("llm.error.endpoint_not_found")
+      when 429       then error_code == "quota_exceeded" ? I18n.t("llm.error.quota_exhausted") : I18n.t("llm.error.rate_limit_429")
+      when 500..599  then I18n.t("llm.error.server_error", status: response.status)
+      else                extract_error_message(error_body, response.body)
+      end
+
+      {
+        success:    false,
+        status:     response.status,
+        error:      translated,
+        error_code: error_code
+      }
+    end
+
+    def raise_error(response)
+      error_body    = JSON.parse(response.body) rescue nil
+      error_message = extract_error_message(error_body, response.body)
+      error_code    = extract_error_code(error_body)
+      routed_tier   = response.headers["X-Clacky-Routed-Tier"]
+
+      Clacky::Logger.warn("client.raise_error",
+        status: response.status,
+        body: response.body.to_s[0, 2000],
+        error_message: error_message.to_s[0, 500],
+        error_code: error_code
+      )
+
+      if error_code == "insufficient_credit" || response.status == 402
+        raise InsufficientCreditError.new(
+          "#{I18n.t("llm.error.insufficient_credit")}",
+          error_code: "insufficient_credit",
+          provider_id: @provider_id,
+          raw_message: error_message
+        )
+      end
+
+      case response.status
+      when 400
+        if error_message.match?(/ThrottlingException|unavailable|quota/i)
+          raise RetryableError.new("#{I18n.t("llm.error.rate_limit_400")}", routed_tier: routed_tier)
+        end
+
+        raise BadRequestError.new(
+          "[LLM] Client request error: #{error_message}",
+          display_message: "#{I18n.t("llm.error.bad_request")}",
+          raw_message: error_message
+        )
+      when 401
+        raise AgentError.new("#{I18n.t("llm.error.invalid_api_key")}", raw_message: error_message)
+      when 403
+        i18n_key = "llm.error.403.#{error_code}"
+        translated = I18n.t(i18n_key)
+        translated = I18n.t("llm.error.403.default") if translated == i18n_key
+        raise AgentError.new(translated, raw_message: error_message) unless error_code == "model_not_allowed"
+
+        raise ModelNotAllowedError.new(
+          translated,
+          error_code: error_code,
+          provider_id: @provider_id,
+          raw_message: error_message
+        )
+      when 404
+        raise AgentError.new("#{I18n.t("llm.error.endpoint_not_found")}", raw_message: error_message)
+      when 429
+        if error_code == "quota_exceeded"
+          raise AgentError.new("#{I18n.t("llm.error.quota_exhausted")}", raw_message: error_message)
+        end
+        raise RetryableError.new("#{I18n.t("llm.error.rate_limit_429")}", routed_tier: routed_tier)
+      when 500..599 then raise RetryableError.new("#{I18n.t("llm.error.server_error", status: response.status)}", routed_tier: routed_tier)
+      else raise AgentError.new("#{I18n.t("llm.error.unexpected", status: response.status)}", raw_message: error_message)
+      end
+    end
+
+    # Raise a friendly error if the response body is HTML (e.g. gateway error page returned with 200)
+    def check_html_response(response)
+      body = response.body.to_s.lstrip
+      if body.start_with?("<!DOCTYPE", "<!doctype", "<html", "<HTML")
+        raise RetryableError, "#{I18n.t("llm.error.html_response")}"
+      end
+    end
+
+    private def extract_error_code(error_body)
+      return nil unless error_body.is_a?(Hash)
+      err = error_body["error"]
+      return err["code"] if err.is_a?(Hash) && err["code"].is_a?(String)
+      nil
+    end
+
+    def extract_error_message(error_body, raw_body)
+      if raw_body.is_a?(String) && raw_body.strip.start_with?("<!DOCTYPE", "<html")
+        return "Invalid API endpoint or server error (received HTML instead of JSON)"
+      end
+
+      return "(empty response body)" if raw_body.to_s.strip.empty? && !error_body.is_a?(Hash)
+      return raw_body unless error_body.is_a?(Hash)
+
+      error_body["upstreamMessage"]&.then { |m| return m unless m.empty? }
+
+      if error_body["error"].is_a?(Hash)
+        upstream_msg = extract_upstream_error(error_body["error"])
+        return upstream_msg if upstream_msg
+      end
+
+      error_body["message"]&.then             { |m| return m }
+      error_body["error"].is_a?(String) ? error_body["error"] : (raw_body.to_s[0..200] + (raw_body.to_s.length > 200 ? "..." : ""))
+    end
+
+    # OpenRouter nests the real provider error inside metadata.raw as a JSON string.
+    private def extract_upstream_error(error_hash)
+      raw = error_hash.dig("metadata", "raw")
+      if raw.is_a?(String) && !raw.empty?
+        nested = JSON.parse(raw) rescue nil
+        if nested.is_a?(Hash)
+          details = nested.dig("error", "details")
+          if details.is_a?(String) && !details.empty?
+            innermost = JSON.parse(details) rescue nil
+            if innermost.is_a?(Hash) && innermost.dig("error", "message")
+              return innermost.dig("error", "message")
+            end
+          end
+          return nested.dig("error", "message") if nested.dig("error", "message")
+        end
+      end
+      error_hash["message"]
+    end
+
+    # Parse JSON with user-friendly error messages.
+    # @param json_string [String] the JSON string to parse
+    # @param context [String] a description of what's being parsed (e.g., "LLM response")
+    # @return [Hash, Array] the parsed JSON
+    # @raise [RetryableError] if parsing fails (indicates a malformed LLM response)
+    def safe_json_parse(json_string, context: "response")
+      JSON.parse(json_string)
+    rescue JSON::ParserError => e
+      # Transform technical JSON parsing errors into user-friendly messages.
+      # These are usually caused by:
+      #   1. Incomplete/truncated LLM response (network issue, timeout)
+      #   2. LLM service returned malformed data
+      #   3. Proxy/gateway corruption
+      error_detail = if json_string.to_s.strip.empty?
+        "received empty response"
+      elsif json_string.to_s.bytesize > 500
+        "response was truncated or malformed (#{json_string.to_s.bytesize} bytes received)"
+      else
+        "response format is invalid"
+      end
+
+      raise RetryableError, "[LLM] Failed to parse #{context}: #{error_detail}. " \
+                           "This usually means the AI service returned incomplete or corrupted data. " \
+                           "The request will be retried automatically."
+    end
+
+    # ── Streaming helpers ─────────────────────────────────────────────────────
+
+    # Invoke the user's on_chunk callback in a way that never lets a callback
+    # error tear down the LLM request. Streaming chunks are best-effort UI
+    # updates; a buggy progress renderer must not abort an in-flight call.
+    private def safe_invoke_on_chunk(on_chunk, **kwargs)
+      return unless on_chunk
+      on_chunk.call(**kwargs)
+    rescue => e
+      Clacky::Logger.warn("[on_chunk] callback raised #{e.class}: #{e.message}")
+    end
+
+    # ── Utilities ─────────────────────────────────────────────────────────────
+
+    def deep_clone(obj)
+      case obj
+      when Hash  then obj.each_with_object({}) { |(k, v), h| h[k] = deep_clone(v) }
+      when Array then obj.map { |item| deep_clone(item) }
+      else obj
+      end
+    end
+  end
+end
