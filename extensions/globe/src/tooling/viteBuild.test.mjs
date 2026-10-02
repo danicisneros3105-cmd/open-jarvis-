@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createBrowserViteConfig } from '../../build/vite.js';
+import { createBrowserViteConfig, frameHeaders } from '../../build/vite.js';
 import standaloneConfig, * as compatibility from '../../vite.config.js';
 import * as providers from '../../server/providers/local.js';
 
@@ -77,4 +77,21 @@ test('build export resolves in Node and has no browser fallback', async () => {
     readFileSync(new URL('../../package.json', import.meta.url)),
   );
   assert.deepEqual(pkg.exports['./build/vite'], { node: './build/vite.js' });
+});
+
+test('frame headers deny by default and only allow loopback embedders', () => {
+  assert.deepEqual(frameHeaders(), {
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "frame-ancestors 'none'",
+  });
+  assert.deepEqual(frameHeaders(['https://evil.example', 'http://10.0.0.5:5173']), {
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "frame-ancestors 'none'",
+  });
+  assert.deepEqual(
+    frameHeaders(['http://127.0.0.1:5173', 'http://localhost:5173', 'http://127.0.0.1:5173']),
+    { 'Content-Security-Policy': 'frame-ancestors http://127.0.0.1:5173 http://localhost:5173' },
+  );
+  const config = createBrowserViteConfig({ frameAncestors: ['http://127.0.0.1:5173'] });
+  assert.equal(config.server.headers['X-Frame-Options'], undefined);
 });

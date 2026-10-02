@@ -11,6 +11,7 @@ from unittest import mock
 from click.testing import CliRunner
 
 from openjarvis.cli import gui_cmd
+from openjarvis.core.config import JarvisConfig
 
 
 def test_gui_custom_ports_use_project_root_and_same_origin_proxy(
@@ -41,7 +42,14 @@ def test_gui_custom_ports_use_project_root_and_same_origin_proxy(
     ):
         result = CliRunner().invoke(
             gui_cmd.gui,
-            ["--frontend-port", "5180", "--api-port", "8123", "--no-browser"],
+            [
+                "--frontend-port",
+                "5180",
+                "--api-port",
+                "8123",
+                "--no-browser",
+                "--no-extensions",
+            ],
         )
 
     assert result.exit_code == 0, result.output
@@ -79,6 +87,40 @@ def test_gui_custom_ports_use_project_root_and_same_origin_proxy(
     wait_for_port.assert_called_once_with(process, "127.0.0.1", 5180)
     open_browser.assert_not_called()
     process.wait.assert_called_once_with()
+
+
+def test_gui_starts_and_stops_bundled_extensions(tmp_path: Path) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    process = mock.Mock(spec=subprocess.Popen)
+    process.wait.return_value = 0
+    order: list[str] = []
+
+    with (
+        mock.patch.object(gui_cmd, "_frontend_dir", return_value=frontend),
+        mock.patch.object(gui_cmd, "_check_frontend_port"),
+        mock.patch.object(gui_cmd, "_ensure_frontend_dependencies"),
+        mock.patch.object(gui_cmd.shutil, "which", return_value="/bin/npm"),
+        mock.patch.object(
+            gui_cmd.subprocess,
+            "Popen",
+            side_effect=lambda *a, **k: order.append("frontend") or process,
+        ),
+        mock.patch.object(gui_cmd, "_wait_for_port", return_value=True),
+        mock.patch("openjarvis.core.config.load_config", return_value=JarvisConfig()),
+        mock.patch(
+            "openjarvis.cli.extensions_cmd.start_extensions",
+            side_effect=lambda: order.append("start"),
+        ),
+        mock.patch(
+            "openjarvis.cli.extensions_cmd.stop_extensions",
+            side_effect=lambda: order.append("stop"),
+        ),
+    ):
+        result = CliRunner().invoke(gui_cmd.gui, ["--no-server", "--no-browser"])
+
+    assert result.exit_code == 0, result.output
+    assert order == ["start", "frontend", "stop"]
 
 
 def test_gui_rejects_occupied_frontend_port_before_launch(tmp_path: Path) -> None:

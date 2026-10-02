@@ -43,6 +43,16 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.live_world  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import openjarvis.tools.clacky_task  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.code_interpreter  # noqa: F401
 except ImportError:
     pass

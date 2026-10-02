@@ -115,6 +115,7 @@ if not _DATA_BOUNDARY_BOOTSTRAP:
     from openjarvis.cli.feedback_cmd import feedback_group
     from openjarvis.cli.gateway_cmd import gateway
     from openjarvis.cli.gui_cmd import gui
+    from openjarvis.cli.extensions_cmd import extensions
     from openjarvis.cli.host_cmd import host
     from openjarvis.cli.init_cmd import init
     from openjarvis.cli.memory_cmd import memory
@@ -166,6 +167,7 @@ if not _DATA_BOUNDARY_BOOTSTRAP:
     cli.add_command(compose, "compose")
     cli.add_command(gateway, "gateway")
     cli.add_command(gui, "gui")
+    cli.add_command(extensions, "extensions")
     cli.add_command(tool, "tool")
     cli.add_command(registry, "registry")
     cli.add_command(config, "config")

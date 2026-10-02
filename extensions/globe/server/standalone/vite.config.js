@@ -19,5 +19,9 @@ export default defineConfig(({ command, mode }) => {
     host: process.env.HOST,
     port: process.env.PORT,
     command,
+    // Space-separated loopback origins allowed to embed the globe (OpenJarvis).
+    frameAncestors: (process.env.GLOBE_FRAME_ANCESTORS || '')
+      .split(/\s+/)
+      .filter(Boolean),
   });
 });

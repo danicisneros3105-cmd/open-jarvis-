@@ -10,6 +10,7 @@ export function createBrowserViteConfig({
   host = 'localhost',
   port = 4173,
   command,
+  frameAncestors = [],
 } = {}) {
   return {
     plugins: [cesium(), applicationHtmlPlugin(), ...plugins],
@@ -39,10 +40,7 @@ export function createBrowserViteConfig({
         deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/ENVIRONMENT'],
       },
       // These headers protect the document containing Provider Settings.
-      headers: {
-        'X-Frame-Options': 'DENY',
-        'Content-Security-Policy': "frame-ancestors 'none'",
-      },
+      headers: frameHeaders(frameAncestors),
     },
     define: {
       'import.meta.env.GOOGLE_MAPS_API_KEY': JSON.stringify(googleApiKey),
@@ -50,4 +48,22 @@ export function createBrowserViteConfig({
     },
     build: { chunkSizeWarningLimit: 1500 },
   };
+}
+
+// Only loopback http(s) origins may embed the globe (e.g. the OpenJarvis UI
+// on http://127.0.0.1:5173). Anything else keeps the default deny policy.
+const LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/;
+
+export function frameHeaders(frameAncestors = []) {
+  const origins = [...new Set(frameAncestors)].filter((origin) =>
+    LOOPBACK_ORIGIN.test(origin),
+  );
+  if (origins.length === 0) {
+    return {
+      'X-Frame-Options': 'DENY',
+      'Content-Security-Policy': "frame-ancestors 'none'",
+    };
+  }
+  // X-Frame-Options cannot list origins; CSP frame-ancestors supersedes it.
+  return { 'Content-Security-Policy': `frame-ancestors ${origins.join(' ')}` };
 }

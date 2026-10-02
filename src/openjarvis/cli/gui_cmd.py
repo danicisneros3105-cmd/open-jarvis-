@@ -84,8 +84,19 @@ def _ensure_frontend_dependencies(frontend: Path, npm: str) -> None:
     "--api-port", default=8000, show_default=True, type=click.IntRange(1, 65535)
 )
 @click.option("--no-server", is_flag=True, help="Do not start the API server.")
+@click.option(
+    "--no-extensions",
+    is_flag=True,
+    help="Do not start the bundled OpenClacky agent and 3D globe.",
+)
 @click.option("--no-browser", is_flag=True, help="Only start the frontend.")
-def gui(frontend_port: int, api_port: int, no_server: bool, no_browser: bool) -> None:
+def gui(
+    frontend_port: int,
+    api_port: int,
+    no_server: bool,
+    no_extensions: bool,
+    no_browser: bool,
+) -> None:
     """Start the browser-based graphical mode in the default browser.
 
     This command is intended for source checkouts. For an installed desktop
@@ -131,6 +142,13 @@ def gui(frontend_port: int, api_port: int, no_server: bool, no_browser: bool) ->
         if server.returncode != 0:
             raise click.ClickException("Could not start the OpenJarvis API server.")
 
+    from openjarvis.cli.extensions_cmd import start_extensions, stop_extensions
+    from openjarvis.core.config import load_config
+
+    with_extensions = not no_extensions and load_config().extensions.autostart
+    if with_extensions:
+        start_extensions()
+
     env = os.environ.copy()
     # Let browser requests use Vite's same-origin proxy at any frontend port.
     # VITE_API_URL is exposed to browser code, so clear an inherited override.
@@ -167,3 +185,6 @@ def gui(frontend_port: int, api_port: int, no_server: bool, no_browser: bool) ->
     except KeyboardInterrupt:
         process.terminate()
         process.wait()
+    finally:
+        if with_extensions:
+            stop_extensions()

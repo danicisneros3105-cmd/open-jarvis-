@@ -1237,6 +1237,34 @@ class TracesConfig:
 
 
 @dataclass(slots=True)
+class ClackyExtensionConfig:
+    """OpenClacky: the hands-on agent (terminal, files, the user's real Chrome)."""
+
+    enabled: bool = True
+    port: int = 7070
+    path: str = ""  # Override for the extensions/clacky checkout
+    timeout_seconds: float = 900.0  # Max time for one delegated task
+
+
+@dataclass(slots=True)
+class GlobeExtensionConfig:
+    """God's Eye View: the live 3D globe."""
+
+    enabled: bool = True
+    port: int = 4173
+    path: str = ""  # Override for the extensions/globe checkout
+
+
+@dataclass(slots=True)
+class ExtensionsConfig:
+    """Bundled extensions that run next to OpenJarvis as one product."""
+
+    autostart: bool = True  # Start them together with ``jarvis gui``
+    clacky: ClackyExtensionConfig = field(default_factory=ClackyExtensionConfig)
+    globe: GlobeExtensionConfig = field(default_factory=GlobeExtensionConfig)
+
+
+@dataclass(slots=True)
 class ProactiveConfig:
     """Proactive agent — autonomous action scheduling and approval routing."""
 
@@ -1791,6 +1819,7 @@ class JarvisConfig:
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     digest: DigestConfig = field(default_factory=DigestConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
+    extensions: ExtensionsConfig = field(default_factory=ExtensionsConfig)
     mining: Optional["MiningConfig"] = None
 
     @property
