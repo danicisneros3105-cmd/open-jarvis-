@@ -115,6 +115,63 @@ Clacky lee el modelo de esta misma configuración:
   supervisor (`src/openjarvis/unified/`) los arranca, comprueba que responden
   y los detiene juntos.
 
+## Evolución: Sergio se adapta a ti
+
+1. **Aprende en cada conversación.** La memoria (`[memory] enabled = true`, que
+   el instalador activa) extrae en segundo plano datos duraderos: tus
+   preferencias, cómo te gusta que te hable, personas, rutinas y metas.
+2. **Consolida tu perfil.** Una vez al día, al abrir `sergio gui`, reescribe
+   `~/.openjarvis/USER.md` con lo aprendido. Cuando dos datos se contradicen,
+   gana el más nuevo; los duplicados se fusionan. Ese perfil va en cada
+   conversación.
+3. **Se puede revisar y deshacer.** Cada versión anterior se guarda como
+   `USER.md.<fecha>.bak` (se conservan las 5 últimas). Lo que el escáner de
+   seguridad marca como sospechoso nunca entra en tu perfil.
+
+```bash
+uv run sergio evolve --show     # evolucionar ahora y ver el perfil
+uv run sergio memory list       # ver todo lo que ha aprendido
+```
+
+## Mejores respuestas con menos tokens
+
+- **LLMLingua-2** ([microsoft/LLMLingua](https://github.com/microsoft/LLMLingua),
+  licencia MIT, gratis) comprime entre 2 y 5 veces los resultados largos de
+  páginas web, PDFs y búsquedas antes de pasárselos al modelo. Conserva los
+  números (precios, fechas, teléfonos). Nunca toca código, archivos ni
+  comandos. Se instala con `./scripts/install-todo-en-uno.sh --ahorro-tokens`
+  (unos 2 GB) y se activa con `[compression] tool_output = true`. Si falla,
+  Sergio usa el texto original.
+- **Ya existía en OpenJarvis:** la compresión de sesiones largas (activa) y un
+  enrutador que puede mandar las preguntas simples al modelo pequeño (hay que
+  configurarlo). La evolución también ahorra tokens: envía un perfil
+  consolidado en lugar de cientos de datos sueltos.
+
+## Llamadas y WhatsApp (siguiente fase)
+
+**Repos gratis que hacen falta** (se añaden como dependencias de Python):
+
+| Repo | Para qué | Licencia |
+|---|---|---|
+| [pipecat-ai/pipecat](https://github.com/pipecat-ai/pipecat) | Motor de voz en tiempo real: oye, piensa y habla sin pausas en una llamada | BSD-2 |
+| [pipecat-ai/pipecat-flows](https://github.com/pipecat-ai/pipecat-flows) | Guiones de conversación paso a paso (reservar una mesa: saludo, fecha, hora, personas, confirmar) para que no se pierda en la llamada | BSD-2 |
+
+**Ya incluidos en Sergio:** WhatsApp (API oficial de Meta en
+`channels/whatsapp.py`), voz a texto (faster-whisper) y texto a voz (Kokoro,
+con voces en español).
+
+**Lo único que no es gratis es la línea telefónica**, porque ningún software
+puede llamar a un teléfono real sin un operador:
+
+- **Una cuenta en Twilio o Telnyx con un número virtual.** Sirve para llamar
+  a Ecuador y a otros países. Se paga por minuto según el país de destino.
+- **Ese mismo número se registra en WhatsApp Business** (API oficial de Meta).
+  Así Sergio tiene su propio WhatsApp sin que necesites el tuyo.
+- **Hablar con Sergio desde el navegador** (PC o móvil) no usa línea
+  telefónica: es gratis.
+- **En toda llamada a terceros, Sergio dice primero que es un asistente de
+  IA**, y no marca ningún número sin tu confirmación.
+
 ## Estado y límites
 
 - Comprobado en Linux: `sergio extensions start` levanta Clacky y el globo.

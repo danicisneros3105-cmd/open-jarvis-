@@ -145,9 +145,14 @@ def gui(
     from openjarvis.cli.extensions_cmd import start_extensions, stop_extensions
     from openjarvis.core.config import load_config
 
-    with_extensions = not no_extensions and load_config().extensions.autostart
+    config = load_config()
+    with_extensions = not no_extensions and config.extensions.autostart
     if with_extensions:
         start_extensions()
+
+    from openjarvis.unified.evolution import maybe_evolve_in_background
+
+    maybe_evolve_in_background(config)
 
     env = os.environ.copy()
     # Let browser requests use Vite's same-origin proxy at any frontend port.

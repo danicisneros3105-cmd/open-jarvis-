@@ -1711,6 +1711,23 @@ class CompressionConfig:
     enabled: bool = True
     threshold: float = 0.50
     strategy: str = "session_consolidation"
+    # Token saver: compress long outputs of the tools below with LLMLingua-2
+    # (``pip install llmlingua``) before they reach the model.
+    tool_output: bool = False
+    tool_output_min_chars: int = 6000
+    tool_output_rate: float = 0.4  # fraction of tokens to keep
+    tool_output_model: str = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
+    tool_output_tools: List[str] = field(
+        default_factory=lambda: [
+            "web_search",
+            "http_request",
+            "browser_extract",
+            "pdf_extract",
+            "knowledge_search",
+            "retrieval",
+            "digest_collect",
+        ]
+    )
 
 
 @dataclass(slots=True)

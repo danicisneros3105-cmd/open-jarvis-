@@ -148,6 +148,7 @@ channel-twitter = ["httpx>=0.27"]
 channel-twitch = ["twitchio>=2.6"]
 channel-nostr = ["pynostr>=0.6"]
 channel-twilio = ["twilio>=9.0"]
+token-saver = ["llmlingua>=0.2.2"]
 channel-gmail = [
     "google-api-python-client>=2.0",
     "google-auth-oauthlib>=1.0",

@@ -5,14 +5,17 @@
 #   ./scripts/install-todo-en-uno.sh               # todo
 #   ./scripts/install-todo-en-uno.sh --sin-globo   # sin el globo 3D
 #   ./scripts/install-todo-en-uno.sh --modelo qwen3:4b
+#   ./scripts/install-todo-en-uno.sh --ahorro-tokens  # + LLMLingua (descarga ~2 GB)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WITH_GLOBE=true
+TOKEN_SAVER=false
 MODEL="qwen3:8b"
 while [[ $# -gt 0 ]]; do
   case $1 in
     --sin-globo) WITH_GLOBE=false ;;
+    --ahorro-tokens) TOKEN_SAVER=true ;;
     --modelo) MODEL=$2; shift ;;
     *) echo "Opción desconocida: $1" >&2; exit 2 ;;
   esac
@@ -51,7 +54,9 @@ fi
 
 say "4/6 OpenJarvis"
 cd "$ROOT"
-uv sync --extra server --extra desktop --extra tools-search --extra inference-cloud
+EXTRAS=(--extra server --extra desktop --extra tools-search --extra inference-cloud)
+if $TOKEN_SAVER; then EXTRAS+=(--extra token-saver); fi
+uv sync "${EXTRAS[@]}"
 
 say "5/6 Extensiones"
 ( cd extensions/clacky && bundle install )
@@ -68,6 +73,9 @@ touch "$CONFIG"
 add_section() { grep -q "^\[$1\]" "$CONFIG" || printf '\n[%s]\n%s\n' "$1" "$2" >> "$CONFIG"; }
 add_section analytics "enabled = false"
 add_section intelligence "default_model = \"$MODEL\""
+# Evolución: Sergio aprende de cada conversación y consolida tu perfil.
+add_section memory "enabled = true"
+if $TOKEN_SAVER; then add_section compression "tool_output = true"; fi
 if ! $WITH_GLOBE; then add_section extensions.globe "enabled = false"; fi
 if command -v ollama >/dev/null; then
   curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 || (ollama serve >/dev/null 2>&1 &)

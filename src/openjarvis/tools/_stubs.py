@@ -488,6 +488,22 @@ class ToolExecutor:
             except ImportError:
                 pass
 
+        # Token saver: shrink long outputs of reading tools (web pages, PDFs,
+        # search results) with LLMLingua-2 when [compression] tool_output is on.
+        if result.success and isinstance(result.content, str) and result.content:
+            try:
+                from openjarvis.unified.token_saver import (
+                    maybe_compress,
+                    runtime_config,
+                )
+
+                result.content, stats = maybe_compress(
+                    tool_call.name, result.content, runtime_config()
+                )
+                result.metadata.update(stats)
+            except Exception:
+                logger.debug("Token saver failed", exc_info=True)
+
         # Prompt-injection defense: content returned by NON-LOCAL tools is
         # untrusted (web pages, emails, API responses). Scan it, and on a
         # HIGH/CRITICAL hit fence it with an explicit marker so the model
