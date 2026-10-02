@@ -17,7 +17,7 @@ const COPY: Record<ExtensionName, { title: string; hint: string }> = {
   },
   clacky: {
     title: 'Clacky',
-    hint: 'Hands-on agent for your computer and browser. Jarvis delegates tasks here.',
+    hint: 'Hands-on agent for your computer and browser. Sergio delegates tasks here.',
   },
 };
 

@@ -29,9 +29,9 @@ Say "3/4 Chrome (para que el agente pueda usar tu navegador)"
 winget install -e --id Google.Chrome --accept-source-agreements --accept-package-agreements 2>$null
 
 Say "4/4 Clonar e instalar dentro de Ubuntu"
-$repo = Read-Host "URL de tu repo (ej. https://github.com/TU_USUARIO/jarvis.git)"
+$repo = Read-Host "URL de tu repo (ej. https://github.com/TU_USUARIO/sergio.git)"
 $branch = Read-Host "Rama (Enter para la rama por defecto)"
-$clone = if ($branch) { "git clone -b '$branch' '$repo' ~/jarvis" } else { "git clone '$repo' ~/jarvis" }
-wsl.exe -d Ubuntu -- bash -lc "test -d ~/jarvis || $clone; cd ~/jarvis && ./scripts/install-todo-en-uno.sh"
+$clone = if ($branch) { "git clone -b '$branch' '$repo' ~/sergio" } else { "git clone '$repo' ~/sergio" }
+wsl.exe -d Ubuntu -- bash -lc "test -d ~/sergio || $clone; cd ~/sergio && ./scripts/install-todo-en-uno.sh"
 
-Write-Host "`nListo. Abre 'Ubuntu' y escribe:  cd ~/jarvis && uv run jarvis gui" -ForegroundColor Green
+Write-Host "`nListo. Abre 'Ubuntu' y escribe:  cd ~/sergio && uv run sergio gui" -ForegroundColor Green

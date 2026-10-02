@@ -1,4 +1,4 @@
-# Jarvis todo-en-uno
+# Sergio — tu asistente todo-en-uno
 
 Un solo asistente personal que une el poder de tres proyectos:
 
@@ -10,12 +10,12 @@ Un solo asistente personal que une el poder de tres proyectos:
 
 No son tres programas sueltos:
 
-- **Un comando** (`jarvis gui`) arranca todo, y al cerrarlo se apaga todo.
+- **Un comando** (`sergio gui`) arranca todo, y al cerrarlo se apaga todo.
 - **Una interfaz:** Chat, Globe y Clacky son pestañas de la misma app.
 - **Un solo cerebro:** Clacky usa automáticamente el modelo que configures en
-  OpenJarvis, sea local o por API. No hay que configurarlo dos veces.
+  Sergio, sea local o por API. No hay que configurarlo dos veces.
 - **Una sola configuración:** `~/.openjarvis/config.toml`.
-- **Herramientas cruzadas:** desde el chat de Jarvis puedes pedir tareas que
+- **Herramientas cruzadas:** desde el chat de Sergio puedes pedir tareas que
   ejecuta Clacky, consultar datos en vivo del mundo y mover el globo.
 
 ## Instalar
@@ -23,25 +23,25 @@ No son tres programas sueltos:
 **Windows 11** (PowerShell como administrador):
 
 ```powershell
-git clone https://github.com/TU_USUARIO/jarvis.git
-cd jarvis
+git clone https://github.com/TU_USUARIO/sergio.git
+cd sergio
 Set-ExecutionPolicy -Scope Process Bypass; .\scripts\install-windows.ps1
 ```
 
 **Linux o WSL:**
 
 ```bash
-git clone https://github.com/TU_USUARIO/jarvis.git ~/jarvis
-cd ~/jarvis && ./scripts/install-todo-en-uno.sh
+git clone https://github.com/TU_USUARIO/sergio.git ~/sergio
+cd ~/sergio && ./scripts/install-todo-en-uno.sh
 ```
 
 ## Usar
 
 ```bash
-uv run jarvis gui                    # abre la app completa
-uv run jarvis extensions status      # estado de Clacky y del globo
-uv run jarvis extensions logs clacky # qué está haciendo Clacky
-uv run jarvis gui --no-extensions    # solo OpenJarvis
+uv run sergio gui                    # abre la app completa
+uv run sergio extensions status      # estado de Clacky y del globo
+uv run sergio extensions logs clacky # qué está haciendo Clacky
+uv run sergio gui --no-extensions    # solo OpenJarvis
 ```
 
 Ejemplos de cosas que puedes pedir en el chat:
@@ -54,7 +54,7 @@ Ejemplos de cosas que puedes pedir en el chat:
   (USGS).
 - *"¿Cuándo es el próximo lanzamiento de SpaceX?"*: usa `upcoming_launches`.
 - *"Organiza mi carpeta Descargas por tipo de archivo"*: usa `clacky_task`.
-  Jarvis te pide confirmación y Clacky lo ejecuta.
+  Sergio te pide confirmación y Clacky lo ejecuta.
 
 Para activar esas herramientas en un agente, añádelas a su lista de tools:
 
@@ -75,7 +75,7 @@ default_model = "qwen3:8b"        # local con Ollama
 default = "ollama"                # o "cloud"
 
 [extensions]
-autostart = true                  # arrancar Clacky y el globo con `jarvis gui`
+autostart = true                  # arrancar Clacky y el globo con `sergio gui`
 
 [extensions.clacky]
 enabled = true
@@ -106,7 +106,7 @@ Clacky lee el modelo de esta misma configuración:
 - **Telemetría:** la de Clacky queda siempre apagada (`CLACKY_TELEMETRY=0`) y
   el instalador apaga también la analítica de OpenJarvis.
 - **Embeber el globo:** el globo prohibía que otra página lo mostrara (CSP
-  `frame-ancestors 'none'`). Ahora acepta solo a la interfaz local de Jarvis
+  `frame-ancestors 'none'`). Ahora acepta solo a la interfaz local de Sergio
   (`GLOBE_FRAME_ANCESTORS`, limitado a orígenes loopback) y sigue bloqueando
   cualquier otro sitio.
 - **Configuración duplicada:** antes cada proyecto tenía su propia
@@ -117,14 +117,14 @@ Clacky lee el modelo de esta misma configuración:
 
 ## Estado y límites
 
-- Comprobado en Linux: `jarvis extensions start` levanta Clacky y el globo.
+- Comprobado en Linux: `sergio extensions start` levanta Clacky y el globo.
   `clacky_task` delega una tarea real a Clacky usando el modelo de OpenJarvis.
   Las pestañas Globe y Clacky se muestran dentro de la app, y el globo aplica
   la vista que pide el chat.
 - `live_flights`, `live_earthquakes` y `upcoming_launches` están probadas con
   respuestas simuladas. Contra las APIs reales hay que probarlas en tu laptop.
 - `clacky_task` da a Clacky control total del ordenador mientras dura la
-  tarea, por eso Jarvis pide confirmación antes de cada delegación.
+  tarea, por eso Sergio pide confirmación antes de cada delegación.
 - Qué tareas son viables y sus límites legales (correos masivos, Instagram,
   llamadas, tareas escolares): [docs/es/CAPACIDADES.md](docs/es/CAPACIDADES.md).
 

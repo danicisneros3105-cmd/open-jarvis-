@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Instala OpenJarvis con sus extensiones integradas (OpenClacky + globo 3D)
+# Instala Sergio (núcleo OpenJarvis) con sus extensiones integradas (OpenClacky + globo 3D)
 # en Linux (Ubuntu/Debian) o dentro de WSL2 en Windows 11.
 #
 #   ./scripts/install-todo-en-uno.sh               # todo
@@ -79,7 +79,7 @@ cat <<EOF
 
 ✅ Listo. Abre una terminal nueva y ejecuta:
 
-   cd $ROOT && uv run jarvis gui
+   cd $ROOT && uv run sergio gui
 
 Se abre una sola app con Chat, Globe y Clacky en la barra lateral.
 Configuración: $CONFIG
